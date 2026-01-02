@@ -1,0 +1,89 @@
+use bevy::prelude::*;
+
+use crate::plugins::core::SimConfig;
+use crate::plugins::sim::SimTickCount;
+
+pub struct OrdersPlugin;
+
+impl Plugin for OrdersPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_event::<CommandEvent>()
+            .add_event::<OrderAppliedEvent>()
+            .init_resource::<OrderQueue>()
+            .add_systems(Update, queue_commands)
+            .add_systems(
+                FixedUpdate,
+                (emit_sample_command, apply_orders, log_applied_orders).run_if(sim_not_paused),
+            );
+    }
+}
+
+#[derive(Event)]
+pub struct CommandEvent {
+    pub kind: CommandKind,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum CommandKind {
+    Noop,
+}
+
+#[derive(Event)]
+pub struct OrderAppliedEvent {
+    pub kind: OrderKind,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum OrderKind {
+    Noop,
+}
+
+#[derive(Resource, Default)]
+pub struct OrderQueue {
+    pub pending: Vec<OrderKind>,
+}
+
+impl OrderQueue {
+    fn push(&mut self, order: OrderKind) {
+        self.pending.push(order);
+    }
+}
+
+fn queue_commands(
+    mut commands: EventReader<CommandEvent>,
+    mut queue: ResMut<OrderQueue>,
+) {
+    for command in commands.read() {
+        let order = match command.kind {
+            CommandKind::Noop => OrderKind::Noop,
+        };
+        queue.push(order);
+    }
+}
+
+fn apply_orders(
+    mut queue: ResMut<OrderQueue>,
+    mut applied: EventWriter<OrderAppliedEvent>,
+) {
+    for order in queue.pending.drain(..) {
+        applied.send(OrderAppliedEvent { kind: order });
+    }
+}
+
+fn emit_sample_command(ticks: Res<SimTickCount>, mut commands: EventWriter<CommandEvent>) {
+    if ticks.tick % 30 == 0 {
+        commands.send(CommandEvent {
+            kind: CommandKind::Noop,
+        });
+    }
+}
+
+fn sim_not_paused(config: Res<SimConfig>) -> bool {
+    !config.paused
+}
+
+fn log_applied_orders(mut applied: EventReader<OrderAppliedEvent>) {
+    for event in applied.read() {
+        info!("Order applied: {:?}", event.kind);
+    }
+}

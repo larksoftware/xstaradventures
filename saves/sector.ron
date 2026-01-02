@@ -1,0 +1,53 @@
+(
+    nodes: [
+        (id: 1, x: -240.0, y: -120.0, modifier: HighRadiation),
+        (id: 2, x: 0.0, y: 160.0, modifier: ClearSignals),
+        (id: 3, x: 220.0, y: -40.0, modifier: RichOreVeins),
+        (id: 4, x: -60.0, y: 40.0, modifier: NebulaInterference),
+    ],
+    routes: [
+        (from: 1, to: 2, distance: 330.0, risk: 0.2),
+        (from: 2, to: 3, distance: 250.0, risk: 0.5),
+        (from: 3, to: 4, distance: 310.0, risk: 0.35),
+        (from: 4, to: 1, distance: 290.0, risk: 0.15),
+    ],
+    intel: [
+        (id: 1, layer: Existence, confidence: 0.6, last_seen_tick: 0, revealed: true, revealed_tick: 0),
+        (id: 2, layer: Existence, confidence: 0.0, last_seen_tick: 0, revealed: false, revealed_tick: 0),
+        (id: 3, layer: Existence, confidence: 0.0, last_seen_tick: 0, revealed: false, revealed_tick: 0),
+        (id: 4, layer: Existence, confidence: 0.0, last_seen_tick: 0, revealed: false, revealed_tick: 0),
+    ],
+    stations: [
+        (
+            kind: MiningOutpost,
+            state: Deploying,
+            x: -216.0,
+            y: -108.0,
+            fuel: 18.0,
+            fuel_capacity: 30.0,
+            build_remaining: 120.0,
+            crisis_type: FuelShortage,
+            crisis_stage: Strained,
+        ),
+    ],
+    ships: [
+        (
+            kind: Scout,
+            state: Idle,
+            role: Scout,
+            x: -264.0,
+            y: -130.0,
+            fuel: 21.0,
+            fuel_capacity: 30.0,
+        ),
+        (
+            kind: Miner,
+            state: Idle,
+            role: Mining,
+            x: -276.0,
+            y: -112.0,
+            fuel: 27.0,
+            fuel_capacity: 45.0,
+        ),
+    ],
+)
