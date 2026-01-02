@@ -10,7 +10,7 @@ fn main() {
         .insert_resource(ClearColor(Color::rgb(0.05, 0.07, 0.1)))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "XStar Adventures".to_string(),
+                title: "X Star Adventures".to_string(),
                 resolution: (1280.0, 720.0).into(),
                 ..default()
             }),

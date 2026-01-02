@@ -2,14 +2,14 @@ use bevy::prelude::*;
 
 use crate::plugins::core::{EventLog, GameState, InputBindings};
 use crate::plugins::sim::SimTickCount;
-use crate::ships::{ship_default_role, ship_fuel_capacity, Fleet, Ship, ShipFuelAlert, ShipKind, ShipState};
+use crate::ships::{
+    ship_default_role, ship_fuel_capacity, Fleet, Ship, ShipFuelAlert, ShipKind, ShipState,
+};
 use crate::stations::{
     station_build_time_seconds, station_fuel_capacity, Station, StationBuild, StationKind,
     StationState,
 };
-use crate::world::{
-    KnowledgeLayer, RouteEdge, Sector, SystemIntel, SystemNode, ZoneModifier,
-};
+use crate::world::{KnowledgeLayer, RouteEdge, Sector, SystemIntel, SystemNode, ZoneModifier};
 
 pub struct WorldGenPlugin;
 
@@ -436,7 +436,10 @@ fn next_position(state: &mut u64) -> Vec2 {
     let x = next_unit(state);
     let y = next_unit(state);
 
-    Vec2::new(scale_to_range(x, -600.0, 600.0), scale_to_range(y, -360.0, 360.0))
+    Vec2::new(
+        scale_to_range(x, -600.0, 600.0),
+        scale_to_range(y, -360.0, 360.0),
+    )
 }
 
 fn next_unit(state: &mut u64) -> f32 {
@@ -447,4 +450,60 @@ fn next_unit(state: &mut u64) -> f32 {
 
 fn scale_to_range(value: f32, min: f32, max: f32) -> f32 {
     min + (max - min) * value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::CommandQueue;
+
+    #[test]
+    fn seed_to_node_id_wraps_large_values() {
+        let seed = u64::from(u32::MAX) + 1;
+        assert_eq!(seed_to_node_id(seed), 1);
+    }
+
+    #[test]
+    fn next_unit_returns_value_in_range() {
+        let mut state = 0u64;
+
+        for _ in 0..5 {
+            let value = next_unit(&mut state);
+            assert!(value >= 0.0);
+            assert!(value <= 1.0);
+        }
+    }
+
+    #[test]
+    fn next_position_stays_within_bounds() {
+        let mut state = 42u64;
+
+        for _ in 0..10 {
+            let position = next_position(&mut state);
+            assert!(position.x >= -600.0);
+            assert!(position.x <= 600.0);
+            assert!(position.y >= -360.0);
+            assert!(position.y <= 360.0);
+        }
+    }
+
+    #[test]
+    fn seed_to_node_id_keeps_small_values() {
+        let seed = 42u64;
+        assert_eq!(seed_to_node_id(seed), 42);
+    }
+
+    #[test]
+    fn apply_seed_world_generates_nodes_and_routes() {
+        let mut world = World::default();
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        let mut sector = Sector::default();
+
+        apply_seed_world(&mut commands, &mut sector, 1337);
+        queue.apply(&mut world);
+
+        assert_eq!(sector.nodes.len(), 5);
+        assert_eq!(sector.routes.len(), 5);
+    }
 }

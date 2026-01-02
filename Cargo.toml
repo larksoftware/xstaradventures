@@ -12,6 +12,9 @@ bevy = "0.13"
 ron = "0.8"
 serde = { version = "1", features = ["derive"] }
 
+[dev-dependencies]
+cargo-llvm-cov = "0.6"
+
 [profile.dev]
 opt-level = 1
 

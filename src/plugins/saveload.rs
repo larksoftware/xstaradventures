@@ -2,12 +2,10 @@ use bevy::prelude::*;
 
 use crate::plugins::core::{EventLog, GameState, InputBindings};
 use crate::ships::{ship_default_role, Fleet, FleetRole, Ship, ShipFuelAlert, ShipKind, ShipState};
-use crate::world::{
-    KnowledgeLayer, RouteEdge, Sector, SystemIntel, SystemNode, ZoneModifier,
-};
 use crate::stations::{
     CrisisStage, CrisisType, Station, StationBuild, StationCrisis, StationKind, StationState,
 };
+use crate::world::{KnowledgeLayer, RouteEdge, Sector, SystemIntel, SystemNode, ZoneModifier};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -105,25 +103,23 @@ impl SaveSector {
         let intel = sector
             .nodes
             .iter()
-            .map(|node| {
-                match intel_map.get(&node.id) {
-                    Some(intel) => SaveIntel {
-                        id: node.id,
-                        layer: intel.layer,
-                        confidence: intel.confidence,
-                        last_seen_tick: intel.last_seen_tick,
-                        revealed: intel.revealed,
-                        revealed_tick: intel.revealed_tick,
-                    },
-                    None => SaveIntel {
-                        id: node.id,
-                        layer: KnowledgeLayer::Existence,
-                        confidence: 0.5,
-                        last_seen_tick: 0,
-                        revealed: false,
-                        revealed_tick: 0,
-                    },
-                }
+            .map(|node| match intel_map.get(&node.id) {
+                Some(intel) => SaveIntel {
+                    id: node.id,
+                    layer: intel.layer,
+                    confidence: intel.confidence,
+                    last_seen_tick: intel.last_seen_tick,
+                    revealed: intel.revealed,
+                    revealed_tick: intel.revealed_tick,
+                },
+                None => SaveIntel {
+                    id: node.id,
+                    layer: KnowledgeLayer::Existence,
+                    confidence: 0.5,
+                    last_seen_tick: 0,
+                    revealed: false,
+                    revealed_tick: 0,
+                },
             })
             .collect();
 
@@ -142,7 +138,12 @@ fn handle_save_request(
     bindings: Res<InputBindings>,
     sector: Res<Sector>,
     intel_query: Query<(&SystemNode, &SystemIntel)>,
-    station_query: Query<(&Station, &Transform, Option<&StationBuild>, Option<&StationCrisis>)>,
+    station_query: Query<(
+        &Station,
+        &Transform,
+        Option<&StationBuild>,
+        Option<&StationCrisis>,
+    )>,
     ship_query: Query<(&Ship, &Transform, Option<&Fleet>)>,
     mut log: ResMut<EventLog>,
 ) {
@@ -231,9 +232,9 @@ fn summarize_modifiers(sector: &Sector) -> String {
 const SAMPLE_RON: &str = r#"
 (
     nodes: [
-        (id: 1, x: 0.0, y: 0.0, modifier: HighRadiation),
-        (id: 2, x: 220.0, y: 0.0, modifier: ClearSignals),
-        (id: 3, x: -180.0, y: 120.0, modifier: NebulaInterference),
+        (id: 1, x: 0.0, y: 0.0, modifier: Some(HighRadiation)),
+        (id: 2, x: 220.0, y: 0.0, modifier: Some(ClearSignals)),
+        (id: 3, x: -180.0, y: 120.0, modifier: Some(NebulaInterference)),
     ],
     routes: [
         (from: 1, to: 2, distance: 220.0, risk: 0.25),
@@ -423,11 +424,11 @@ fn apply_loaded_sector(
             },
         };
 
-                let system_node = SystemNode {
-                    id: node.id,
-                    position: Vec2::new(node.x, node.y),
-                    modifier: node.modifier,
-                };
+        let system_node = SystemNode {
+            id: node.id,
+            position: Vec2::new(node.x, node.y),
+            modifier: node.modifier,
+        };
         sector.nodes.push(system_node.clone());
         commands.spawn((
             system_node,
@@ -474,12 +475,87 @@ fn apply_loaded_sector(
                 fuel: ship.fuel,
                 fuel_capacity: ship.fuel_capacity,
             },
-            Fleet {
-                role: ship.role,
-            },
+            Fleet { role: ship.role },
             ShipFuelAlert::default(),
             Name::new(format!("Ship-{:?}-{:?}", ship.kind, ship.state)),
             SpatialBundle::from_transform(Transform::from_xyz(ship.x, ship.y, 0.4)),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ron::de::from_str;
+    use std::collections::HashMap;
+
+    #[test]
+    fn summarize_modifiers_counts_expected_values() {
+        let sector = Sector {
+            nodes: vec![
+                SystemNode {
+                    id: 1,
+                    position: Vec2::new(0.0, 0.0),
+                    modifier: Some(ZoneModifier::HighRadiation),
+                },
+                SystemNode {
+                    id: 2,
+                    position: Vec2::new(1.0, 0.0),
+                    modifier: Some(ZoneModifier::HighRadiation),
+                },
+                SystemNode {
+                    id: 3,
+                    position: Vec2::new(0.0, 1.0),
+                    modifier: Some(ZoneModifier::ClearSignals),
+                },
+                SystemNode {
+                    id: 4,
+                    position: Vec2::new(1.0, 1.0),
+                    modifier: None,
+                },
+            ],
+            routes: Vec::new(),
+        };
+
+        let summary = summarize_modifiers(&sector);
+        assert_eq!(summary, "CLR:1 NONE:1 RAD:2");
+    }
+
+    #[test]
+    fn save_sector_defaults_missing_intel() {
+        let sector = Sector {
+            nodes: vec![SystemNode {
+                id: 10,
+                position: Vec2::new(5.0, -3.0),
+                modifier: None,
+            }],
+            routes: Vec::new(),
+        };
+        let intel_map: HashMap<u32, &SystemIntel> = HashMap::new();
+        let payload = SaveSector::from_sector(&sector, &intel_map, &[], &[]);
+
+        assert_eq!(payload.intel.len(), 1);
+        let intel = &payload.intel[0];
+        assert_eq!(intel.id, 10);
+        assert_eq!(intel.layer, KnowledgeLayer::Existence);
+        assert_eq!(intel.confidence, 0.5);
+        assert_eq!(intel.last_seen_tick, 0);
+        assert!(!intel.revealed);
+        assert_eq!(intel.revealed_tick, 0);
+    }
+
+    #[test]
+    fn sample_ron_parses_expected_counts() {
+        match from_str::<SaveSector>(SAMPLE_RON) {
+            Ok(payload) => {
+                assert_eq!(payload.nodes.len(), 3);
+                assert_eq!(payload.routes.len(), 2);
+                assert_eq!(payload.stations.len(), 1);
+                assert_eq!(payload.ships.len(), 2);
+            }
+            Err(error) => {
+                panic!("SAMPLE_RON parse failed: {}", error);
+            }
+        }
     }
 }

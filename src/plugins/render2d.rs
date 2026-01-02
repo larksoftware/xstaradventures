@@ -18,10 +18,7 @@ impl Plugin for Render2DPlugin {
             .init_resource::<MapZoomOverride>()
             .init_resource::<FocusMarker>()
             .add_systems(Startup, setup_camera)
-            .add_systems(
-                Update,
-                sync_camera_view.run_if(in_state(GameState::InGame)),
-            )
+            .add_systems(Update, sync_camera_view.run_if(in_state(GameState::InGame)))
             .add_systems(
                 Update,
                 (
@@ -245,7 +242,11 @@ fn view_is_world(view: Res<ViewMode>) -> bool {
     matches!(*view, ViewMode::World)
 }
 
-fn handle_map_zoom(input: Res<ButtonInput<KeyCode>>, bindings: Res<InputBindings>, mut zoom: ResMut<MapZoomOverride>) {
+fn handle_map_zoom(
+    input: Res<ButtonInput<KeyCode>>,
+    bindings: Res<InputBindings>,
+    mut zoom: ResMut<MapZoomOverride>,
+) {
     if !input.just_pressed(bindings.map_zoom) {
         return;
     }
@@ -557,7 +558,11 @@ fn clear_focus_marker_on_map(mut marker: ResMut<FocusMarker>) {
 fn update_station_labels(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    stations: Query<(&Station, Option<&crate::stations::StationCrisis>, &Transform)>,
+    stations: Query<(
+        &Station,
+        Option<&crate::stations::StationCrisis>,
+        &Transform,
+    )>,
     labels: Query<Entity, With<StationLabel>>,
 ) {
     for entity in labels.iter() {
@@ -1192,4 +1197,489 @@ fn risk_color(risk: f32) -> Color {
         low.g() + (high.g() - low.g()) * t,
         low.b() + (high.b() - low.b()) * t,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{map_center, map_zoom_presets, risk_color};
+    use crate::world::{Sector, SystemNode};
+    use bevy::prelude::Vec2;
+
+    fn assert_close(a: f32, b: f32) {
+        let diff = (a - b).abs();
+        assert!(diff < 1e-6, "expected {} close to {}", a, b);
+    }
+
+    #[test]
+    fn map_center_empty_is_zero() {
+        let sector = Sector::default();
+        let center = map_center(&sector);
+        assert_eq!(center, Vec2::ZERO);
+    }
+
+    #[test]
+    fn map_center_averages_nodes() {
+        let mut sector = Sector::default();
+        sector.nodes.push(SystemNode {
+            id: 1,
+            position: Vec2::new(10.0, 20.0),
+            modifier: None,
+        });
+        sector.nodes.push(SystemNode {
+            id: 2,
+            position: Vec2::new(30.0, 40.0),
+            modifier: None,
+        });
+
+        let center = map_center(&sector);
+        assert_close(center.x, 20.0);
+        assert_close(center.y, 30.0);
+    }
+
+    #[test]
+    fn map_zoom_presets_values() {
+        let presets = map_zoom_presets();
+        assert_eq!(presets, [0.6, 0.8, 1.0]);
+    }
+
+    #[test]
+    fn risk_color_low_is_greenish() {
+        let color = risk_color(0.0);
+        assert_close(color.r(), 0.2);
+        assert_close(color.g(), 0.7);
+        assert_close(color.b(), 0.4);
+    }
+
+    #[test]
+    fn risk_color_high_is_reddish() {
+        let color = risk_color(1.0);
+        assert_close(color.r(), 0.9);
+        assert_close(color.g(), 0.25);
+        assert_close(color.b(), 0.2);
+    }
+
+    #[test]
+    fn map_zoom_presets_sorted_low_to_high() {
+        let presets = map_zoom_presets();
+        assert!(presets[0] < presets[1]);
+        assert!(presets[1] < presets[2]);
+    }
+
+    #[test]
+    fn map_zoom_presets_monotonic_spacing() {
+        let presets = map_zoom_presets();
+        let step_low = presets[1] - presets[0];
+        let step_high = presets[2] - presets[1];
+
+        assert_close(step_low, step_high);
+    }
+
+    #[test]
+    fn map_zoom_presets_mid_is_avg_of_extremes() {
+        let presets = map_zoom_presets();
+        let expected_mid = (presets[0] + presets[2]) * 0.5;
+
+        assert_close(presets[1], expected_mid);
+    }
+
+    #[test]
+    fn risk_color_midpoint_is_between_low_high() {
+        let mid = risk_color(0.5);
+        let low = risk_color(0.0);
+        let high = risk_color(1.0);
+        assert!(mid.r() > low.r() && mid.r() < high.r());
+        assert!(mid.g() < low.g() && mid.g() > high.g());
+        assert!(mid.b() < low.b() && mid.b() > high.b());
+    }
+
+    #[test]
+    fn risk_color_midpoint_green_between_low_high() {
+        let mid = risk_color(0.5);
+        let low = risk_color(0.0);
+        let high = risk_color(1.0);
+
+        assert!(mid.g() < low.g());
+        assert!(mid.g() > high.g());
+    }
+
+    #[test]
+    fn map_center_single_node_equals_position() {
+        let mut sector = Sector::default();
+        sector.nodes.push(SystemNode {
+            id: 1,
+            position: Vec2::new(-12.0, 48.0),
+            modifier: None,
+        });
+
+        let center = map_center(&sector);
+        assert_close(center.x, -12.0);
+        assert_close(center.y, 48.0);
+    }
+
+    #[test]
+    fn risk_color_clamps_below_zero() {
+        let below = risk_color(-0.5);
+        let low = risk_color(0.0);
+        assert_close(below.r(), low.r());
+        assert_close(below.g(), low.g());
+        assert_close(below.b(), low.b());
+    }
+
+    #[test]
+    fn risk_color_clamps_above_one() {
+        let above = risk_color(1.5);
+        let high = risk_color(1.0);
+        assert_close(above.r(), high.r());
+        assert_close(above.g(), high.g());
+        assert_close(above.b(), high.b());
+    }
+
+    #[test]
+    fn map_center_averages_three_nodes() {
+        let mut sector = Sector::default();
+        sector.nodes.push(SystemNode {
+            id: 1,
+            position: Vec2::new(0.0, 0.0),
+            modifier: None,
+        });
+        sector.nodes.push(SystemNode {
+            id: 2,
+            position: Vec2::new(6.0, 3.0),
+            modifier: None,
+        });
+        sector.nodes.push(SystemNode {
+            id: 3,
+            position: Vec2::new(3.0, 9.0),
+            modifier: None,
+        });
+
+        let center = map_center(&sector);
+        assert_close(center.x, 3.0);
+        assert_close(center.y, 4.0);
+    }
+
+    #[test]
+    fn risk_color_midpoint_components_between_extremes() {
+        let mid = risk_color(0.5);
+        let low = risk_color(0.0);
+        let high = risk_color(1.0);
+
+        assert!(mid.r() >= low.r() && mid.r() <= high.r());
+        assert!(mid.g() <= low.g() && mid.g() >= high.g());
+        assert!(mid.b() <= low.b() && mid.b() >= high.b());
+    }
+
+    #[test]
+    fn map_center_handles_negative_positions() {
+        let mut sector = Sector::default();
+        sector.nodes.push(SystemNode {
+            id: 1,
+            position: Vec2::new(-10.0, -20.0),
+            modifier: None,
+        });
+        sector.nodes.push(SystemNode {
+            id: 2,
+            position: Vec2::new(-30.0, -40.0),
+            modifier: None,
+        });
+
+        let center = map_center(&sector);
+        assert_close(center.x, -20.0);
+        assert_close(center.y, -30.0);
+    }
+
+    #[test]
+    fn map_zoom_presets_len_is_three() {
+        let presets = map_zoom_presets();
+        assert_eq!(presets.len(), 3);
+    }
+
+    #[test]
+    fn map_center_is_zero_for_two_opposite_nodes() {
+        let mut sector = Sector::default();
+        sector.nodes.push(SystemNode {
+            id: 1,
+            position: Vec2::new(5.0, 5.0),
+            modifier: None,
+        });
+        sector.nodes.push(SystemNode {
+            id: 2,
+            position: Vec2::new(-5.0, -5.0),
+            modifier: None,
+        });
+
+        let center = map_center(&sector);
+        assert_close(center.x, 0.0);
+        assert_close(center.y, 0.0);
+    }
+
+    #[test]
+    fn risk_color_midpoint_matches_linear_mix() {
+        let mid = risk_color(0.5);
+        let low = risk_color(0.0);
+        let high = risk_color(1.0);
+
+        let expected_r = (low.r() + high.r()) * 0.5;
+        let expected_g = (low.g() + high.g()) * 0.5;
+        let expected_b = (low.b() + high.b()) * 0.5;
+
+        assert_close(mid.r(), expected_r);
+        assert_close(mid.g(), expected_g);
+        assert_close(mid.b(), expected_b);
+    }
+
+    #[test]
+    fn risk_color_midpoint_red_gt_low() {
+        let mid = risk_color(0.5);
+        let low = risk_color(0.0);
+
+        assert!(mid.r() > low.r());
+    }
+
+    #[test]
+    fn risk_color_midpoint_green_lt_low() {
+        let mid = risk_color(0.5);
+        let low = risk_color(0.0);
+
+        assert!(mid.g() < low.g());
+    }
+
+    #[test]
+    fn risk_color_midpoint_blue_lt_low() {
+        let mid = risk_color(0.5);
+        let low = risk_color(0.0);
+
+        assert!(mid.b() < low.b());
+    }
+
+    #[test]
+    fn risk_color_midpoint_red_lt_high() {
+        let mid = risk_color(0.5);
+        let high = risk_color(1.0);
+
+        assert!(mid.r() < high.r());
+    }
+
+    #[test]
+    fn risk_color_midpoint_green_gt_high() {
+        let mid = risk_color(0.5);
+        let high = risk_color(1.0);
+
+        assert!(mid.g() > high.g());
+    }
+
+    #[test]
+    fn risk_color_midpoint_blue_gt_high() {
+        let mid = risk_color(0.5);
+        let high = risk_color(1.0);
+
+        assert!(mid.b() > high.b());
+    }
+
+    #[test]
+    fn map_center_two_nodes_midpoint() {
+        let mut sector = Sector::default();
+        sector.nodes.push(SystemNode {
+            id: 1,
+            position: Vec2::new(2.0, 6.0),
+            modifier: None,
+        });
+        sector.nodes.push(SystemNode {
+            id: 2,
+            position: Vec2::new(10.0, 14.0),
+            modifier: None,
+        });
+
+        let center = map_center(&sector);
+        assert_close(center.x, 6.0);
+        assert_close(center.y, 10.0);
+    }
+
+    #[test]
+    fn map_center_matches_average_of_all_nodes_again() {
+        let mut sector = Sector::default();
+        sector.nodes.push(SystemNode {
+            id: 1,
+            position: Vec2::new(4.0, 8.0),
+            modifier: None,
+        });
+        sector.nodes.push(SystemNode {
+            id: 2,
+            position: Vec2::new(10.0, -4.0),
+            modifier: None,
+        });
+        sector.nodes.push(SystemNode {
+            id: 3,
+            position: Vec2::new(-2.0, 6.0),
+            modifier: None,
+        });
+
+        let center = map_center(&sector);
+        assert_close(center.x, 4.0);
+        assert_close(center.y, 10.0 / 3.0);
+    }
+
+    #[test]
+    fn map_center_all_nodes_same_position_is_that_position() {
+        let mut sector = Sector::default();
+        let position = Vec2::new(7.5, -3.25);
+        sector.nodes.push(SystemNode {
+            id: 1,
+            position,
+            modifier: None,
+        });
+        sector.nodes.push(SystemNode {
+            id: 2,
+            position,
+            modifier: None,
+        });
+        sector.nodes.push(SystemNode {
+            id: 3,
+            position,
+            modifier: None,
+        });
+
+        let center = map_center(&sector);
+        assert_close(center.x, position.x);
+        assert_close(center.y, position.y);
+    }
+
+    #[test]
+    fn map_center_four_nodes_quadrant_average() {
+        let mut sector = Sector::default();
+        sector.nodes.push(SystemNode {
+            id: 1,
+            position: Vec2::new(4.0, 4.0),
+            modifier: None,
+        });
+        sector.nodes.push(SystemNode {
+            id: 2,
+            position: Vec2::new(-4.0, 4.0),
+            modifier: None,
+        });
+        sector.nodes.push(SystemNode {
+            id: 3,
+            position: Vec2::new(-4.0, -4.0),
+            modifier: None,
+        });
+        sector.nodes.push(SystemNode {
+            id: 4,
+            position: Vec2::new(4.0, -4.0),
+            modifier: None,
+        });
+
+        let center = map_center(&sector);
+        assert_close(center.x, 0.0);
+        assert_close(center.y, 0.0);
+    }
+
+    #[test]
+    fn map_zoom_presets_values_are_unique() {
+        let presets = map_zoom_presets();
+        assert!(presets[0] != presets[1]);
+        assert!(presets[1] != presets[2]);
+        assert!(presets[0] != presets[2]);
+    }
+
+    #[test]
+    fn risk_color_midpoint_is_avg_of_endpoints() {
+        let low = risk_color(0.0);
+        let high = risk_color(1.0);
+        let mid = risk_color(0.5);
+
+        assert_close(mid.r(), (low.r() + high.r()) * 0.5);
+        assert_close(mid.g(), (low.g() + high.g()) * 0.5);
+        assert_close(mid.b(), (low.b() + high.b()) * 0.5);
+    }
+
+    #[test]
+    fn map_center_three_nodes_midpoint_check() {
+        let mut sector = Sector::default();
+        sector.nodes.push(SystemNode {
+            id: 1,
+            position: Vec2::new(3.0, 6.0),
+            modifier: None,
+        });
+        sector.nodes.push(SystemNode {
+            id: 2,
+            position: Vec2::new(9.0, 0.0),
+            modifier: None,
+        });
+        sector.nodes.push(SystemNode {
+            id: 3,
+            position: Vec2::new(0.0, 12.0),
+            modifier: None,
+        });
+
+        let center = map_center(&sector);
+        assert_close(center.x, 4.0);
+        assert_close(center.y, 6.0);
+    }
+
+    #[test]
+    fn map_zoom_presets_sorted_unique() {
+        let presets = map_zoom_presets();
+        assert!(presets[0] < presets[1]);
+        assert!(presets[1] < presets[2]);
+    }
+
+    #[test]
+    fn risk_color_low_matches_constants() {
+        let low = risk_color(0.0);
+        assert_close(low.r(), 0.2);
+        assert_close(low.g(), 0.7);
+        assert_close(low.b(), 0.4);
+    }
+
+    #[test]
+    fn risk_color_high_matches_constants() {
+        let high = risk_color(1.0);
+        assert_close(high.r(), 0.9);
+        assert_close(high.g(), 0.25);
+        assert_close(high.b(), 0.2);
+    }
+
+    #[test]
+    fn map_zoom_presets_equal_constants() {
+        let presets = map_zoom_presets();
+        assert_eq!(presets, [0.6, 0.8, 1.0]);
+    }
+
+    #[test]
+    fn risk_color_low_green_component_max() {
+        let low = risk_color(0.0);
+        assert!(low.g() > low.r());
+        assert!(low.g() > low.b());
+    }
+
+    #[test]
+    fn risk_color_high_red_component_max() {
+        let high = risk_color(1.0);
+        assert!(high.r() > high.g());
+        assert!(high.r() > high.b());
+    }
+
+    #[test]
+    fn map_zoom_presets_first_is_point_six() {
+        let presets = map_zoom_presets();
+        assert_close(presets[0], 0.6);
+    }
+
+    #[test]
+    fn risk_color_low_blue_component_gt_red() {
+        let low = risk_color(0.0);
+        assert!(low.b() > low.r());
+    }
+
+    #[test]
+    fn risk_color_high_green_component_lt_blue() {
+        let high = risk_color(1.0);
+        assert!(high.g() > high.b());
+    }
+
+    #[test]
+    fn map_zoom_presets_second_is_point_eight() {
+        let presets = map_zoom_presets();
+        assert_close(presets[1], 0.8);
+    }
 }

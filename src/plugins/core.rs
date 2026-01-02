@@ -181,7 +181,11 @@ impl Plugin for CorePlugin {
             .add_systems(OnExit(GameState::InGame), log_exit_ingame)
             .add_systems(
                 Update,
-                (handle_pause_toggle, handle_tick_rate_input, handle_view_toggle),
+                (
+                    handle_pause_toggle,
+                    handle_tick_rate_input,
+                    handle_view_toggle,
+                ),
             )
             .add_systems(Update, tick_loading.run_if(in_state(GameState::Loading)));
     }
@@ -304,7 +308,136 @@ fn handle_view_toggle(
 }
 
 fn fixed_time_from_config(config: &SimConfig) -> Time<Fixed> {
-    let tick_hz = if config.tick_hz <= 0.0 { 10.0 } else { config.tick_hz };
+    let tick_hz = if config.tick_hz <= 0.0 {
+        10.0
+    } else {
+        config.tick_hz
+    };
     let seconds = 1.0 / tick_hz;
     Time::<Fixed>::from_duration(Duration::from_secs_f32(seconds))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::SystemState;
+
+    #[test]
+    fn sim_config_default_values() {
+        let config = SimConfig::default();
+        assert_eq!(config.tick_hz, 10.0);
+        assert!(!config.paused);
+    }
+
+    #[test]
+    fn event_log_push_trims_oldest_entries() {
+        let mut log = EventLog::default();
+        for index in 0..12 {
+            log.push(format!("entry-{}", index));
+        }
+
+        let entries = log.entries();
+        assert_eq!(entries.len(), 8);
+        assert_eq!(entries.first().map(String::as_str), Some("entry-4"));
+        assert_eq!(entries.last().map(String::as_str), Some("entry-11"));
+    }
+
+    #[test]
+    fn fixed_time_from_config_clamps_non_positive_tick_rate() {
+        let config = SimConfig {
+            tick_hz: 0.0,
+            paused: false,
+        };
+        let fixed = fixed_time_from_config(&config);
+        assert_eq!(fixed.timestep().as_secs_f32(), 0.1);
+    }
+
+    #[test]
+    fn handle_view_toggle_updates_view_and_log() {
+        let mut world = World::default();
+        world.insert_resource(ButtonInput::<KeyCode>::default());
+        world.insert_resource(InputBindings::default());
+        world.insert_resource(ViewMode::World);
+        world.insert_resource(EventLog::default());
+
+        {
+            let mut input = world.resource_mut::<ButtonInput<KeyCode>>();
+            input.press(KeyCode::KeyM);
+        }
+
+        let mut system_state: SystemState<(
+            Res<ButtonInput<KeyCode>>,
+            Res<InputBindings>,
+            ResMut<ViewMode>,
+            ResMut<EventLog>,
+        )> = SystemState::new(&mut world);
+        let (input, bindings, view, log) = system_state.get_mut(&mut world);
+        handle_view_toggle(input, bindings, view, log);
+        system_state.apply(&mut world);
+
+        let view = world.resource::<ViewMode>();
+        assert_eq!(*view, ViewMode::Map);
+        let log = world.resource::<EventLog>();
+        assert_eq!(
+            log.entries().last().map(String::as_str),
+            Some("View: ResMut(Map)")
+        );
+    }
+
+    #[test]
+    fn handle_pause_toggle_flips_config() {
+        let mut world = World::default();
+        world.insert_resource(ButtonInput::<KeyCode>::default());
+        world.insert_resource(InputBindings::default());
+        world.insert_resource(SimConfig::default());
+
+        {
+            let mut input = world.resource_mut::<ButtonInput<KeyCode>>();
+            input.press(KeyCode::Space);
+        }
+
+        let mut system_state: SystemState<(
+            Res<ButtonInput<KeyCode>>,
+            Res<InputBindings>,
+            ResMut<SimConfig>,
+        )> = SystemState::new(&mut world);
+        let (input, bindings, config) = system_state.get_mut(&mut world);
+        handle_pause_toggle(input, bindings, config);
+        system_state.apply(&mut world);
+
+        let config = world.resource::<SimConfig>();
+        assert!(config.paused);
+    }
+
+    #[test]
+    fn handle_tick_rate_input_clamps_and_updates_fixed_time() {
+        let mut world = World::default();
+        world.insert_resource(ButtonInput::<KeyCode>::default());
+        world.insert_resource(InputBindings::default());
+        world.insert_resource(SimConfig {
+            tick_hz: 1.0,
+            paused: false,
+        });
+        world.insert_resource(Time::<Fixed>::from_duration(Duration::from_secs_f32(0.1)));
+
+        {
+            let mut input = world.resource_mut::<ButtonInput<KeyCode>>();
+            input.press(KeyCode::BracketLeft);
+        }
+
+        let mut system_state: SystemState<(
+            Res<ButtonInput<KeyCode>>,
+            Res<InputBindings>,
+            ResMut<SimConfig>,
+            ResMut<Time<Fixed>>,
+        )> = SystemState::new(&mut world);
+        let (input, bindings, config, fixed_time) = system_state.get_mut(&mut world);
+        handle_tick_rate_input(input, bindings, config, fixed_time);
+        system_state.apply(&mut world);
+
+        let config = world.resource::<SimConfig>();
+        assert_eq!(config.tick_hz, 1.0);
+        let fixed_time = world.resource::<Time<Fixed>>();
+        assert_eq!(fixed_time.timestep().as_secs_f32(), 1.0);
+    }
 }

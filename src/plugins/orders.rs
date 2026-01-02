@@ -49,10 +49,7 @@ impl OrderQueue {
     }
 }
 
-fn queue_commands(
-    mut commands: EventReader<CommandEvent>,
-    mut queue: ResMut<OrderQueue>,
-) {
+fn queue_commands(mut commands: EventReader<CommandEvent>, mut queue: ResMut<OrderQueue>) {
     for command in commands.read() {
         let order = match command.kind {
             CommandKind::Noop => OrderKind::Noop,
@@ -61,10 +58,7 @@ fn queue_commands(
     }
 }
 
-fn apply_orders(
-    mut queue: ResMut<OrderQueue>,
-    mut applied: EventWriter<OrderAppliedEvent>,
-) {
+fn apply_orders(mut queue: ResMut<OrderQueue>, mut applied: EventWriter<OrderAppliedEvent>) {
     for order in queue.pending.drain(..) {
         applied.send(OrderAppliedEvent { kind: order });
     }
@@ -85,5 +79,25 @@ fn sim_not_paused(config: Res<SimConfig>) -> bool {
 fn log_applied_orders(mut applied: EventReader<OrderAppliedEvent>) {
     for event in applied.read() {
         info!("Order applied: {:?}", event.kind);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::SystemState;
+
+    #[test]
+    fn sim_not_paused_returns_false_when_paused() {
+        let mut world = World::default();
+        world.insert_resource(SimConfig {
+            tick_hz: 10.0,
+            paused: true,
+        });
+
+        let mut system_state: SystemState<Res<SimConfig>> = SystemState::new(&mut world);
+        let config = system_state.get(&world);
+        let allowed = sim_not_paused(config);
+        assert!(!allowed);
     }
 }

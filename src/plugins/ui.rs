@@ -1,14 +1,14 @@
 use bevy::prelude::*;
 use std::path::Path;
 
-use crate::plugins::core::GameState;
 use crate::plugins::core::EventLog;
+use crate::plugins::core::GameState;
 use crate::plugins::core::SimConfig;
 use crate::plugins::core::ViewMode;
+use crate::plugins::render2d::FocusMarker;
 use crate::plugins::render2d::IntelRefreshCooldown;
 use crate::plugins::render2d::MapZoomOverride;
 use crate::plugins::render2d::RenderToggles;
-use crate::plugins::render2d::FocusMarker;
 use crate::plugins::sim::SimTickCount;
 use crate::plugins::worldgen::WorldSeed;
 use crate::ships::{ship_default_role, FleetRole, Ship, ShipKind, ShipState};
@@ -108,7 +108,6 @@ pub struct MapUi;
 #[derive(Component)]
 struct WorldUi;
 
-
 #[derive(Component)]
 struct MapGridRoot;
 
@@ -188,7 +187,6 @@ fn setup_hud(mut commands: Commands, asset_server: Res<AssetServer>) {
     }
 
     let font = asset_server.load(font_path);
-
 
     commands.spawn((
         HudText,
@@ -767,7 +765,10 @@ fn risk_breakdown(sector: &Sector) -> (f32, f32) {
     (route_risk, modifier_risk)
 }
 
-fn update_modifier_panel(sector: Res<Sector>, mut panel: Query<&mut Text, With<ModifierPanelText>>) {
+fn update_modifier_panel(
+    sector: Res<Sector>,
+    mut panel: Query<&mut Text, With<ModifierPanelText>>,
+) {
     if let Some(mut text) = panel.iter_mut().next() {
         if let Some(section) = text.sections.get_mut(0) {
             let mut counts = std::collections::BTreeMap::new();
@@ -999,10 +1000,7 @@ fn update_ship_panel(ships: Query<&Ship>, mut panel: Query<&mut Text, With<ShipP
     }
 }
 
-fn update_focus_panel(
-    marker: Res<FocusMarker>,
-    mut panel: Query<&mut Text, With<FocusText>>,
-) {
+fn update_focus_panel(marker: Res<FocusMarker>, mut panel: Query<&mut Text, With<FocusText>>) {
     if let Some(mut text) = panel.iter_mut().next() {
         if let Some(section) = text.sections.get_mut(0) {
             match marker.node_id() {

@@ -1,11 +1,11 @@
 use bevy::prelude::*;
 
-use crate::plugins::core::{FogConfig, SimConfig};
 use crate::plugins::core::EventLog;
+use crate::plugins::core::{FogConfig, SimConfig};
 use crate::ships::{ship_fuel_burn_per_minute, Ship, ShipFuelAlert, ShipState};
 use crate::stations::{
-    CrisisStage, CrisisType, Station, StationBuild, StationCrisis, StationState,
-    station_fuel_burn_per_minute,
+    station_fuel_burn_per_minute, CrisisStage, CrisisType, Station, StationBuild, StationCrisis,
+    StationState,
 };
 use crate::world::{zone_modifier_effect, KnowledgeLayer, Sector, SystemIntel};
 
@@ -13,22 +13,21 @@ pub struct SimPlugin;
 
 impl Plugin for SimPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SimTickCount>()
-            .add_systems(
-                FixedUpdate,
-                (
-                    tick_simulation,
-                    decay_intel,
-                    station_fuel_burn,
-                    station_build_progress,
-                    station_crisis_stub,
-                    station_lifecycle_stub,
-                    ship_fuel_burn,
-                    ship_fuel_alerts,
-                    ship_state_stub,
-                )
-                    .run_if(sim_not_paused),
-            );
+        app.init_resource::<SimTickCount>().add_systems(
+            FixedUpdate,
+            (
+                tick_simulation,
+                decay_intel,
+                station_fuel_burn,
+                station_build_progress,
+                station_crisis_stub,
+                station_lifecycle_stub,
+                ship_fuel_burn,
+                ship_fuel_alerts,
+                ship_state_stub,
+            )
+                .run_if(sim_not_paused),
+        );
     }
 }
 
@@ -219,8 +218,7 @@ fn station_crisis_stub(
 
             match crisis {
                 Some(existing) => {
-                    if existing.stage != stage || existing.crisis_type != CrisisType::FuelShortage
-                    {
+                    if existing.stage != stage || existing.crisis_type != CrisisType::FuelShortage {
                         commands.entity(entity).insert(StationCrisis {
                             crisis_type: CrisisType::FuelShortage,
                             stage,
@@ -274,10 +272,7 @@ fn ship_state_stub(mut ships: Query<&mut Ship>) {
     }
 }
 
-fn ship_fuel_alerts(
-    mut log: ResMut<EventLog>,
-    mut alerts: Query<(&Ship, &mut ShipFuelAlert)>,
-) {
+fn ship_fuel_alerts(mut log: ResMut<EventLog>, mut alerts: Query<(&Ship, &mut ShipFuelAlert)>) {
     for (ship, mut alert) in alerts.iter_mut() {
         if ship.fuel_capacity <= 0.0 {
             continue;
@@ -304,5 +299,145 @@ fn ship_fuel_alerts(
         if !critical {
             alert.critical = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::SystemState;
+    use crate::ships::ShipKind;
+    use crate::stations::StationKind;
+    use std::time::Duration;
+
+    #[test]
+    fn advance_intel_layer_stops_at_stability() {
+        let mut intel = SystemIntel {
+            layer: KnowledgeLayer::Threats,
+            confidence: 0.5,
+            last_seen_tick: 0,
+            revealed: false,
+            revealed_tick: 0,
+        };
+
+        advance_intel_layer(&mut intel);
+        assert_eq!(intel.layer, KnowledgeLayer::Stability);
+        advance_intel_layer(&mut intel);
+        assert_eq!(intel.layer, KnowledgeLayer::Stability);
+    }
+
+    #[test]
+    fn refresh_intel_sets_confidence_and_tick() {
+        let mut intel = SystemIntel {
+            layer: KnowledgeLayer::Existence,
+            confidence: 0.2,
+            last_seen_tick: 5,
+            revealed: false,
+            revealed_tick: 0,
+        };
+
+        refresh_intel(&mut intel, 42);
+        assert_eq!(intel.last_seen_tick, 42);
+        assert_eq!(intel.confidence, 1.0);
+    }
+
+    #[test]
+    fn station_fuel_burn_skips_failed_state() {
+        let mut world = World::default();
+        let mut time = Time::<Fixed>::from_duration(Duration::from_secs_f32(60.0));
+        time.advance_by(Duration::from_secs_f32(60.0));
+        world.insert_resource(time);
+        world.spawn(Station {
+            kind: StationKind::MiningOutpost,
+            state: StationState::Failed,
+            fuel: 10.0,
+            fuel_capacity: 30.0,
+        });
+
+        let mut system_state: SystemState<(Res<Time<Fixed>>, Query<&mut Station>)> =
+            SystemState::new(&mut world);
+        let (time, stations) = system_state.get_mut(&mut world);
+        station_fuel_burn(time, stations);
+        system_state.apply(&mut world);
+
+        let mut query = world.query::<&Station>();
+        for station in query.iter(&world) {
+            assert_eq!(station.fuel, 10.0);
+        }
+    }
+
+    #[test]
+    fn ship_state_stub_disables_empty_fuel() {
+        let mut world = World::default();
+        world.spawn(Ship {
+            kind: ShipKind::Scout,
+            state: ShipState::Idle,
+            fuel: 0.0,
+            fuel_capacity: 30.0,
+        });
+
+        let mut system_state: SystemState<Query<&mut Ship>> = SystemState::new(&mut world);
+        let ships = system_state.get_mut(&mut world);
+        ship_state_stub(ships);
+        system_state.apply(&mut world);
+
+        let mut query = world.query::<&Ship>();
+        for ship in query.iter(&world) {
+            assert_eq!(ship.state, ShipState::Disabled);
+        }
+    }
+
+    #[test]
+    fn ship_fuel_alerts_logs_once_and_sets_flags() {
+        let mut world = World::default();
+        world.insert_resource(EventLog::default());
+        world.spawn((
+            Ship {
+                kind: ShipKind::Scout,
+                state: ShipState::Idle,
+                fuel: 1.0,
+                fuel_capacity: 20.0,
+            },
+            ShipFuelAlert::default(),
+        ));
+
+        let mut system_state: SystemState<(
+            ResMut<EventLog>,
+            Query<(&Ship, &mut ShipFuelAlert)>,
+        )> = SystemState::new(&mut world);
+        {
+            let (log, alerts) = system_state.get_mut(&mut world);
+            ship_fuel_alerts(log, alerts);
+        }
+        system_state.apply(&mut world);
+
+        let log = world.resource::<EventLog>();
+        assert_eq!(log.entries().len(), 2);
+
+        let mut system_state: SystemState<(
+            ResMut<EventLog>,
+            Query<(&Ship, &mut ShipFuelAlert)>,
+        )> = SystemState::new(&mut world);
+        {
+            let (log, alerts) = system_state.get_mut(&mut world);
+            ship_fuel_alerts(log, alerts);
+        }
+        system_state.apply(&mut world);
+
+        let log = world.resource::<EventLog>();
+        assert_eq!(log.entries().len(), 2);
+
+        let mut query = world.query::<&ShipFuelAlert>();
+        for alert in query.iter(&world) {
+            assert!(alert.low);
+            assert!(alert.critical);
+        }
+    }
+
+    #[test]
+    fn zone_modifier_risk_empty_sector_is_zero() {
+        let sector = Sector::default();
+        let risk = zone_modifier_risk(&sector);
+        assert_eq!(risk, 0.0);
     }
 }
