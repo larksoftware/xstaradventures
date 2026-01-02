@@ -16,6 +16,7 @@ impl Plugin for Render2DPlugin {
         app.init_resource::<RenderToggles>()
             .init_resource::<IntelRefreshCooldown>()
             .init_resource::<MapZoomOverride>()
+            .init_resource::<FocusMarker>()
             .add_systems(Startup, setup_camera)
             .add_systems(
                 Update,
@@ -26,6 +27,7 @@ impl Plugin for Render2DPlugin {
                 (
                     handle_render_toggles,
                     handle_map_zoom,
+                    clear_focus_marker_on_map,
                     spawn_node_visuals,
                     sync_node_visuals,
                     update_node_visuals,
@@ -52,6 +54,7 @@ impl Plugin for Render2DPlugin {
                     sync_ship_visuals,
                     update_ship_visuals,
                     update_ship_labels,
+                    draw_focus_marker,
                     center_camera_on_revealed,
                     sync_view_entities,
                 )
@@ -99,6 +102,7 @@ pub struct RenderToggles {
     show_grid: bool,
     show_backdrop: bool,
     show_route_labels: bool,
+    show_node_labels: bool,
 }
 
 impl Default for RenderToggles {
@@ -110,6 +114,7 @@ impl Default for RenderToggles {
             show_grid: true,
             show_backdrop: true,
             show_route_labels: true,
+            show_node_labels: true,
         }
     }
 }
@@ -123,8 +128,12 @@ impl RenderToggles {
         self.show_grid
     }
 
-    pub fn backdrop_enabled(&self) -> bool {
-        self.show_backdrop
+    pub fn route_labels_enabled(&self) -> bool {
+        self.show_route_labels
+    }
+
+    pub fn node_labels_enabled(&self) -> bool {
+        self.show_node_labels
     }
 }
 
@@ -173,6 +182,22 @@ impl Default for IntelRefreshCooldown {
 impl IntelRefreshCooldown {
     pub fn remaining_ticks(&self, current: u64) -> u64 {
         self.next_allowed_tick.saturating_sub(current)
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct FocusMarker {
+    position: Option<Vec2>,
+    node_id: Option<u32>,
+}
+
+impl FocusMarker {
+    pub fn position(&self) -> Option<Vec2> {
+        self.position
+    }
+
+    pub fn node_id(&self) -> Option<u32> {
+        self.node_id
     }
 }
 
@@ -470,6 +495,8 @@ fn center_camera_on_revealed(
     bindings: Res<InputBindings>,
     nodes: Query<(&SystemNode, &SystemIntel)>,
     mut cameras: Query<&mut Transform, With<Camera2d>>,
+    mut marker: ResMut<FocusMarker>,
+    mut log: ResMut<crate::plugins::core::EventLog>,
 ) {
     if !input.just_pressed(bindings.center_camera) {
         return;
@@ -478,17 +505,53 @@ fn center_camera_on_revealed(
     let mut target = None;
     for (node, intel) in nodes.iter() {
         if intel.revealed {
-            target = Some(node.position);
+            target = Some((node.position, node.id));
             break;
         }
     }
 
-    if let Some(target) = target {
+    if let Some((target, node_id)) = target {
         for mut transform in cameras.iter_mut() {
             transform.translation.x = target.x;
             transform.translation.y = target.y;
         }
+        marker.position = Some(target);
+        marker.node_id = Some(node_id);
+        log.push(format!("World camera centered on node {}", node_id));
+    } else {
+        marker.position = None;
+        marker.node_id = None;
+        log.push("World camera center failed: no revealed nodes".to_string());
     }
+}
+
+fn draw_focus_marker(mut gizmos: Gizmos, marker: Res<FocusMarker>) {
+    let position = match marker.position() {
+        Some(position) => position,
+        None => {
+            return;
+        }
+    };
+
+    let color = Color::rgba(0.85, 0.9, 1.0, 0.6);
+    let size = 10.0;
+
+    gizmos.line_2d(
+        position + Vec2::new(-size, 0.0),
+        position + Vec2::new(size, 0.0),
+        color,
+    );
+    gizmos.line_2d(
+        position + Vec2::new(0.0, -size),
+        position + Vec2::new(0.0, size),
+        color,
+    );
+    gizmos.circle_2d(position, size * 0.6, Color::rgba(0.7, 0.85, 0.95, 0.35));
+}
+
+fn clear_focus_marker_on_map(mut marker: ResMut<FocusMarker>) {
+    marker.position = None;
+    marker.node_id = None;
 }
 
 fn update_station_labels(
@@ -780,6 +843,7 @@ fn update_route_labels(
             let screen = camera.world_to_viewport(camera_transform, mid.extend(0.0));
             if let Some(screen) = screen {
                 let position = Vec2::new(screen.x + 6.0, screen.y - 10.0);
+                let label_color = risk_color(route.risk);
                 commands.spawn((
                     RouteLabel,
                     MapUi,
@@ -788,15 +852,17 @@ fn update_route_labels(
                         TextStyle {
                             font: font.clone(),
                             font_size: 18.0,
-                            color: Color::rgb(0.95, 0.96, 0.98),
+                            color: label_color,
                         },
                     )
                     .with_style(Style {
                         position_type: PositionType::Absolute,
                         left: Val::Px(position.x),
                         top: Val::Px(position.y),
+                        padding: UiRect::all(Val::Px(2.0)),
                         ..default()
-                    }),
+                    })
+                    .with_background_color(Color::rgba(0.05, 0.08, 0.12, 0.6)),
                 ));
             }
         }
@@ -816,7 +882,7 @@ fn update_node_labels(
         commands.entity(entity).despawn();
     }
 
-    if !toggles.show_nodes {
+    if !toggles.show_nodes || !toggles.show_node_labels {
         return;
     }
 
@@ -853,6 +919,7 @@ fn update_node_labels(
         let screen = camera.world_to_viewport(camera_transform, position.extend(0.0));
         if let Some(screen) = screen {
             let label_pos = Vec2::new(screen.x + 6.0, screen.y - 12.0);
+            let alpha = 0.4 + 0.6 * intel.confidence.clamp(0.0, 1.0);
             commands.spawn((
                 NodeLabel,
                 MapUi,
@@ -861,15 +928,17 @@ fn update_node_labels(
                     TextStyle {
                         font: font.clone(),
                         font_size: 14.0,
-                        color: Color::rgb(0.82, 0.9, 0.96),
+                        color: Color::rgba(0.82, 0.9, 0.96, alpha),
                     },
                 )
                 .with_style(Style {
                     position_type: PositionType::Absolute,
                     left: Val::Px(label_pos.x),
                     top: Val::Px(label_pos.y),
+                    padding: UiRect::all(Val::Px(2.0)),
                     ..default()
-                }),
+                })
+                .with_background_color(Color::rgba(0.05, 0.08, 0.12, 0.6)),
             ));
         }
     }
@@ -925,6 +994,12 @@ fn handle_render_toggles(
         toggles.show_route_labels = !toggles.show_route_labels;
         updated = true;
         info!("Render route labels: {}", toggles.show_route_labels);
+    }
+
+    if input.just_pressed(bindings.toggle_node_labels) {
+        toggles.show_node_labels = !toggles.show_node_labels;
+        updated = true;
+        info!("Render node labels: {}", toggles.show_node_labels);
     }
 
     if updated {

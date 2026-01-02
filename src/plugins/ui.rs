@@ -8,6 +8,7 @@ use crate::plugins::core::ViewMode;
 use crate::plugins::render2d::IntelRefreshCooldown;
 use crate::plugins::render2d::MapZoomOverride;
 use crate::plugins::render2d::RenderToggles;
+use crate::plugins::render2d::FocusMarker;
 use crate::plugins::sim::SimTickCount;
 use crate::plugins::worldgen::WorldSeed;
 use crate::ships::{ship_default_role, FleetRole, Ship, ShipKind, ShipState};
@@ -33,6 +34,7 @@ impl Plugin for UIPlugin {
                     update_cooldown_panel,
                     update_station_panel,
                     update_ship_panel,
+                    update_focus_panel,
                     sync_map_ui_visibility,
                     sync_map_grid_visibility,
                 ),
@@ -96,6 +98,9 @@ struct StationPanelText;
 
 #[derive(Component)]
 struct ShipPanelText;
+
+#[derive(Component)]
+struct FocusText;
 
 #[derive(Component)]
 pub struct MapUi;
@@ -224,7 +229,7 @@ fn setup_hud(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn((
         ControlsText,
         TextBundle::from_section(
-            "Keys: Space pause | [ ] rate | - = seed | M map | N nodes | R routes | F rings | G grid | V/A reveal | K mods | B/J spawn | S save | L load",
+            "Keys: Space pause | [ ] rate | - = seed | M map | N nodes | R routes | F rings | G grid | T route labels | Y node labels | V/A reveal | K mods | B/J spawn | S save | L load",
             TextStyle {
                 font: font.clone(),
                 font_size: 14.0,
@@ -296,7 +301,7 @@ fn setup_hud(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn((
         MapUi,
         TextBundle::from_section(
-            "Map: G grid | V reveal adj | A reveal all | C zoom",
+            "Map: G grid | R routes | T route labels | Y node labels | V reveal adj | A reveal all | C zoom",
             TextStyle {
                 font: font.clone(),
                 font_size: 12.0,
@@ -307,6 +312,24 @@ fn setup_hud(mut commands: Commands, asset_server: Res<AssetServer>) {
             position_type: PositionType::Absolute,
             left: Val::Px(14.0),
             top: Val::Px(136.0),
+            ..default()
+        }),
+    ));
+
+    commands.spawn((
+        MapUi,
+        TextBundle::from_section(
+            "Route label: distance + risk",
+            TextStyle {
+                font: font.clone(),
+                font_size: 12.0,
+                color: Color::rgb(0.6, 0.65, 0.72),
+            },
+        )
+        .with_style(Style {
+            position_type: PositionType::Absolute,
+            left: Val::Px(14.0),
+            top: Val::Px(154.0),
             ..default()
         }),
     ));
@@ -520,7 +543,7 @@ fn setup_hud(mut commands: Commands, asset_server: Res<AssetServer>) {
         TextBundle::from_section(
             "Ships: --",
             TextStyle {
-                font,
+                font: font.clone(),
                 font_size: 14.0,
                 color: Color::rgb(0.7, 0.75, 0.82),
             },
@@ -529,6 +552,25 @@ fn setup_hud(mut commands: Commands, asset_server: Res<AssetServer>) {
             position_type: PositionType::Absolute,
             right: Val::Px(14.0),
             top: Val::Px(380.0),
+            ..default()
+        }),
+    ));
+
+    commands.spawn((
+        FocusText,
+        WorldUi,
+        TextBundle::from_section(
+            "Focus: --",
+            TextStyle {
+                font,
+                font_size: 13.0,
+                color: Color::rgb(0.7, 0.8, 0.9),
+            },
+        )
+        .with_style(Style {
+            position_type: PositionType::Absolute,
+            right: Val::Px(14.0),
+            top: Val::Px(420.0),
             ..default()
         }),
     ));
@@ -546,13 +588,15 @@ fn update_hud(
     if let Some(mut text) = hud_text.iter_mut().next() {
         if let Some(section) = text.sections.get_mut(0) {
             section.value = format!(
-                "Seed: {} | Tick: {} | Rate: {:.0} Hz | Paused: {} | Rings: {} | Grid: {} | Zoom: {} | View: {:?}",
+                "Seed: {} | Tick: {} | Rate: {:.0} Hz | Paused: {} | Rings: {} | Grid: {} | RouteLbl: {} | NodeLbl: {} | Zoom: {} | View: {:?}",
                 seed.value,
                 ticks.tick,
                 config.tick_hz,
                 config.paused,
                 if toggles.rings_enabled() { "On" } else { "Off" },
                 if toggles.grid_enabled() { "On" } else { "Off" },
+                if toggles.route_labels_enabled() { "On" } else { "Off" },
+                if toggles.node_labels_enabled() { "On" } else { "Off" },
                 zoom.label(),
                 *view
             );
@@ -951,6 +995,24 @@ fn update_ship_panel(ships: Query<&Ship>, mut panel: Query<&mut Text, With<ShipP
                 "Ships: {} | {} | Roles {} | Fuel {:.0}%",
                 kind_summary, state_summary, role_summary, fuel_pct
             );
+        }
+    }
+}
+
+fn update_focus_panel(
+    marker: Res<FocusMarker>,
+    mut panel: Query<&mut Text, With<FocusText>>,
+) {
+    if let Some(mut text) = panel.iter_mut().next() {
+        if let Some(section) = text.sections.get_mut(0) {
+            match marker.node_id() {
+                Some(node_id) => {
+                    section.value = format!("Focus: node {}", node_id);
+                }
+                None => {
+                    section.value = "Focus: --".to_string();
+                }
+            };
         }
     }
 }

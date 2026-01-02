@@ -146,13 +146,35 @@ Example test naming:
 
 ## 9. Change & Scope Management
 
-If this repository is versioned:
+All commits **must follow this standard format**:
 
-* Use imperative commit messages
+- A **title line no longer than 72 characters**
+- Followed by a **blank line**
+- Followed by a **bulleted list of changes**
+- **One blank line between bullets**
 
-  * e.g. "Add crisis escalation thresholds"
-* Keep commits focused on one system or document
-* Avoid cross-cutting changes without justification
+#### Example
+
+```
+Add transcript-aware clip segmentation
+
+- Parse Whisper JSON into time-aligned segments
+- Replace fixed 30s slicing with semantic boundaries
+- Add unit tests for edge cases and silence gaps
+```
+
+Additional rules:
+
+- Use **imperative mood** in the title (e.g., “Add”, “Fix”, “Refactor”)
+- Be concise but descriptive
+- Do not squash unrelated changes into a single commit
+- Do not create commits unless explicitly requested (agent rule)
+
+### Pull Requests
+
+- Include a short description of the change
+- Note tests run (e.g., `cargo test`, `cargo clippy`) or state if not run
+- Link related issues if applicable
 
 Scope expansion must be **explicit and visible**.
 Update `docs/one-page-mvp.md` and `docs/mvp.md` when scope changes.

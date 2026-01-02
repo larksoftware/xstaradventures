@@ -15,7 +15,7 @@ This document lists the current bootstrap controls and what they affect.
 - `Z`: clear reveals (debug).
 - `B`: spawn FuelDepot (debug).
 - `J`: spawn Scout (debug).
-- `H`: center camera on revealed node (world view).
+- `H`: center camera on revealed node and mark focus (world view).
 
 ## Map & Debug Rendering
 
@@ -25,7 +25,8 @@ This document lists the current bootstrap controls and what they affect.
 - `F`: toggle fog/intel rings.
 - `G`: toggle map grid.
 - `P`: toggle world backdrop.
-- `T`: toggle route labels.
+- `T`: toggle route labels (distance + risk).
+- `Y`: toggle node labels.
 - `I`: refresh intel confidence to full (debug).
 - `O`: advance intel layer by one step (debug).
 - `K`: randomize zone modifiers (debug).
