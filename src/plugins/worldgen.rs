@@ -6,7 +6,7 @@ use crate::fleets::{RiskTolerance, ScoutBehavior};
 use crate::pirates::PirateBase;
 use crate::plugins::core::{DebugWindow, EventLog, GameState, InputBindings};
 use crate::plugins::player::PlayerControl;
-use crate::plugins::sim::SimTickCount;
+use crate::plugins::sim::{BoundaryWarningState, SimTickCount};
 use crate::ships::{
     cargo_capacity, ship_default_role, ship_fuel_capacity, Cargo, Fleet, Ship, ShipFuelAlert,
     ShipKind, ShipState, Velocity,
@@ -358,6 +358,7 @@ fn spawn_player_ship(commands: &mut Commands, node: &SystemNode) {
         Velocity::default(),
         PlayerControl,
         ShipFuelAlert::default(),
+        BoundaryWarningState::default(),
         Name::new("Ship-Player"),
         SpatialBundle::from_transform(Transform::from_xyz(x, y, 0.4)),
     ));
@@ -451,8 +452,8 @@ fn next_position(state: &mut u64) -> Vec2 {
     let y = next_unit(state);
 
     Vec2::new(
-        scale_to_range(x, -600.0, 600.0),
-        scale_to_range(y, -360.0, 360.0),
+        scale_to_range(x, -1500.0, 1500.0),
+        scale_to_range(y, -1000.0, 1000.0),
     )
 }
 
@@ -494,10 +495,10 @@ mod tests {
 
         for _ in 0..10 {
             let position = next_position(&mut state);
-            assert!(position.x >= -600.0);
-            assert!(position.x <= 600.0);
-            assert!(position.y >= -360.0);
-            assert!(position.y <= 360.0);
+            assert!(position.x >= -1500.0);
+            assert!(position.x <= 1500.0);
+            assert!(position.y >= -1000.0);
+            assert!(position.y <= 1000.0);
         }
     }
 

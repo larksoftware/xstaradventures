@@ -7,12 +7,13 @@ use crate::ore::{OreKind, OreNode};
 use crate::pirates::{schedule_next_launch, PirateBase, PirateShip};
 use crate::plugins::core::{EventLog, InputBindings};
 use crate::plugins::core::{FogConfig, SimConfig};
+use crate::plugins::player::PlayerControl;
 use crate::ships::{ship_fuel_burn_per_minute, Ship, ShipFuelAlert, ShipState};
 use crate::stations::{
     station_fuel_burn_per_minute, station_ore_production_per_minute, CrisisStage, CrisisType,
     Station, StationBuild, StationCrisis, StationCrisisLog, StationProduction, StationState,
 };
-use crate::world::{zone_modifier_effect, KnowledgeLayer, Sector, SystemIntel, SystemNode};
+use crate::world::{zone_modifier_effect, KnowledgeLayer, Sector, SystemIntel, SystemNode, ZoneModifier};
 
 pub struct SimPlugin;
 
@@ -33,6 +34,7 @@ impl Plugin for SimPlugin {
                     log_station_crisis_changes,
                     scout_behavior,
                     spawn_ore_at_revealed_nodes,
+                    check_boundary_warnings,
                     pirate_launches,
                     pirate_move,
                     pirate_harassment,
@@ -55,6 +57,22 @@ pub struct SimTickCount {
 struct RevealedNodesTracker {
     spawned: std::collections::HashSet<u32>,
 }
+
+#[derive(Component, Default)]
+pub struct BoundaryWarningState {
+    last_level: BoundaryWarningLevel,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum BoundaryWarningLevel {
+    #[default]
+    Safe,
+    SoftWarning,
+    DangerZone,
+}
+
+const BOUNDARY_SOFT_WARNING: f32 = 1200.0;
+const BOUNDARY_DANGER_ZONE: f32 = 2200.0;
 
 fn tick_simulation(mut counter: ResMut<SimTickCount>, sector: Res<Sector>) {
     counter.tick = counter.tick.saturating_add(1);
@@ -644,43 +662,130 @@ fn scout_behavior(
     }
 }
 
+fn next_unit_ore_rng(state: &mut u64) -> f32 {
+    *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+    let value = (*state >> 33) as u32;
+    (value as f32) / (u32::MAX as f32)
+}
+
+const ORE_MIN_RADIUS: f32 = 400.0;
+const ORE_MAX_RADIUS: f32 = 800.0;
+
+fn ore_count_for_zone(modifier: Option<ZoneModifier>, is_starter: bool, rng: &mut u64) -> usize {
+    if is_starter {
+        let rand_val = next_unit_ore_rng(rng);
+        return 3 + (rand_val * 3.0) as usize;
+    }
+
+    match modifier {
+        Some(ZoneModifier::RichOreVeins) => {
+            let rand_val = next_unit_ore_rng(rng);
+            20 + (rand_val * 11.0) as usize
+        }
+        Some(ZoneModifier::HighRadiation) => {
+            let rand_val = next_unit_ore_rng(rng);
+            (rand_val * 6.0) as usize
+        }
+        Some(ZoneModifier::NebulaInterference) => {
+            let rand_val = next_unit_ore_rng(rng);
+            8 + (rand_val * 8.0) as usize
+        }
+        Some(ZoneModifier::ClearSignals) => {
+            let rand_val = next_unit_ore_rng(rng);
+            10 + (rand_val * 6.0) as usize
+        }
+        None => {
+            let rand_val = next_unit_ore_rng(rng);
+            5 + (rand_val * 8.0) as usize
+        }
+    }
+}
+
 fn spawn_ore_at_revealed_nodes(
     mut commands: Commands,
     mut tracker: ResMut<RevealedNodesTracker>,
     nodes: Query<(&SystemNode, &SystemIntel)>,
 ) {
-    let offsets_and_kinds = [
-        (Vec2::new(60.0, 40.0), OreKind::CommonOre),
-        (Vec2::new(-80.0, 30.0), OreKind::CommonOre),
-        (Vec2::new(20.0, -70.0), OreKind::FuelOre),
-    ];
-
     for (node, intel) in nodes.iter() {
         if intel.revealed && !tracker.spawned.contains(&node.id) {
             tracker.spawned.insert(node.id);
 
-            for (index, (offset, kind)) in offsets_and_kinds.iter().enumerate() {
+            let mut rng_state = node.id as u64;
+            let is_starter = intel.revealed_tick == 0;
+            let ore_count = ore_count_for_zone(node.modifier, is_starter, &mut rng_state);
+
+            for index in 0..ore_count {
+                let angle = next_unit_ore_rng(&mut rng_state) * std::f32::consts::TAU;
+                let radius = ORE_MIN_RADIUS + next_unit_ore_rng(&mut rng_state) * (ORE_MAX_RADIUS - ORE_MIN_RADIUS);
+
+                let offset_x = angle.cos() * radius;
+                let offset_y = angle.sin() * radius;
+
+                let common_ore_count = (ore_count as f32 * 0.7) as usize;
+                let kind = if index < common_ore_count {
+                    OreKind::CommonOre
+                } else {
+                    OreKind::FuelOre
+                };
+
                 let capacity = 20.0 + (index as f32 * 6.0) + ((node.id as f32) * 0.01);
                 let kind_str = match kind {
                     OreKind::CommonOre => "OreNode",
                     OreKind::FuelOre => "FuelNode",
                 };
+
                 commands.spawn((
                     OreNode {
-                        kind: *kind,
+                        kind,
                         remaining: capacity,
                         capacity,
                         rate_per_second: 3.0,
                     },
                     Name::new(format!("{}-{}-{}", kind_str, node.id, index + 1)),
                     SpatialBundle::from_transform(Transform::from_xyz(
-                        node.position.x + offset.x,
-                        node.position.y + offset.y,
+                        node.position.x + offset_x,
+                        node.position.y + offset_y,
                         0.3,
                     )),
                 ));
             }
         }
+    }
+}
+
+fn check_boundary_warnings(
+    mut log: ResMut<EventLog>,
+    mut player_query: Query<(&Transform, &mut BoundaryWarningState), With<PlayerControl>>,
+) {
+    let (transform, mut warning_state) = match player_query.single_mut() {
+        Ok(value) => value,
+        Err(_) => return,
+    };
+
+    let player_pos = Vec2::new(transform.translation.x, transform.translation.y);
+    let distance_from_origin = player_pos.length();
+
+    let current_level = if distance_from_origin >= BOUNDARY_DANGER_ZONE {
+        BoundaryWarningLevel::DangerZone
+    } else if distance_from_origin >= BOUNDARY_SOFT_WARNING {
+        BoundaryWarningLevel::SoftWarning
+    } else {
+        BoundaryWarningLevel::Safe
+    };
+
+    if current_level != warning_state.last_level {
+        match current_level {
+            BoundaryWarningLevel::Safe => {
+                // Don't log when returning to safe zone
+            }
+            BoundaryWarningLevel::SoftWarning => {
+                log.push("Long-range sensors detect signal degradation. Consider returning to civilization.".to_string());
+            }
+            BoundaryWarningLevel::DangerZone => {
+                log.push("WARNING: You are drifting into the void. Hull stress increasing. Fuel reserves critical. Turn back NOW.".to_string());
+            }
+        }
+        warning_state.last_level = current_level;
     }
 }
 

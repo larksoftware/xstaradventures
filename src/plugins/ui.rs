@@ -10,7 +10,7 @@ use crate::plugins::core::EventLog;
 use crate::plugins::core::GameState;
 use crate::plugins::core::SimConfig;
 use crate::plugins::core::ViewMode;
-use crate::plugins::player::PlayerControl;
+use crate::plugins::player::{NearbyTargets, PlayerControl};
 use crate::plugins::render2d::FocusMarker;
 use crate::plugins::render2d::IntelRefreshCooldown;
 use crate::plugins::render2d::MapZoomOverride;
@@ -54,6 +54,10 @@ impl Plugin for UIPlugin {
                     update_modifier_panel,
                 )
                     .run_if(view_is_map),
+            )
+            .add_systems(
+                Update,
+                update_tactical_panel.run_if(view_is_world),
             )
             .init_resource::<HoveredNode>();
     }
@@ -104,6 +108,9 @@ struct FleetPanelText;
 
 #[derive(Component)]
 struct PlayerPanelText;
+
+#[derive(Component)]
+struct TacticalPanelText;
 
 #[derive(Component)]
 struct DebugPanelText;
@@ -532,7 +539,7 @@ fn setup_hud(mut commands: Commands, asset_server: Res<AssetServer>) {
         TextBundle::from_section(
             "Focus: --",
             TextStyle {
-                font,
+                font: font.clone(),
                 font_size: 13.0,
                 color: Color::srgb(0.7, 0.8, 0.9),
             },
@@ -541,6 +548,25 @@ fn setup_hud(mut commands: Commands, asset_server: Res<AssetServer>) {
             position_type: PositionType::Absolute,
             right: Val::Px(14.0),
             top: Val::Px(460.0),
+            ..default()
+        }),
+    ));
+
+    commands.spawn((
+        TacticalPanelText,
+        WorldUi,
+        TextBundle::from_section(
+            "Targets: --\n[Tab] Next Target",
+            TextStyle {
+                font,
+                font_size: 13.0,
+                color: Color::srgb(0.0, 1.0, 1.0),
+            },
+        )
+        .with_node(UiNode {
+            position_type: PositionType::Absolute,
+            right: Val::Px(14.0),
+            bottom: Val::Px(14.0),
             ..default()
         }),
     ));
@@ -556,25 +582,35 @@ fn setup_debug_panel(mut commands: Commands, asset_server: Res<AssetServer>) {
 
     let font = asset_server.load(font_path);
 
-    let mut bundle = TextBundle::from_section(
-        "Debug Panel",
-        TextStyle {
-            font,
-            font_size: 12.0,
-            color: Color::srgb(0.85, 0.9, 0.95),
-        },
-    )
-    .with_node(UiNode {
-        position_type: PositionType::Absolute,
-        left: Val::Px(14.0),
-        top: Val::Px(80.0),
-        ..default()
-    })
-    .with_background_color(Color::srgba(0.02, 0.04, 0.08, 0.85));
-
-    bundle.visibility = Visibility::Hidden;
-
-    commands.spawn((DebugPanelText, bundle));
+    // Create container with background
+    commands
+        .spawn((
+            DebugPanelText,
+            NodeBundle {
+                node: UiNode {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(14.0),
+                    top: Val::Px(80.0),
+                    width: Val::Auto,
+                    height: Val::Auto,
+                    padding: UiRect::all(Val::Px(10.0)),
+                    ..default()
+                },
+                background_color: Color::srgb(0.08, 0.1, 0.12).into(),
+                visibility: Visibility::Hidden,
+                ..default()
+            },
+        ))
+        .with_children(|parent| {
+            parent.spawn(TextBundle::from_section(
+                "Debug Panel",
+                TextStyle {
+                    font,
+                    font_size: 12.0,
+                    color: Color::srgb(0.85, 0.9, 0.95),
+                },
+            ));
+        });
 }
 
 fn update_hud(view: Res<ViewMode>, mut hud_text: Query<&mut Text, With<HudText>>) {
@@ -1031,6 +1067,30 @@ fn update_focus_panel(marker: Res<FocusMarker>, mut panel: Query<&mut Text, With
     }
 }
 
+fn update_tactical_panel(
+    targets: Res<NearbyTargets>,
+    mut panel: Query<&mut Text, With<TacticalPanelText>>,
+) {
+    if let Some(mut text) = panel.iter_mut().next() {
+        if targets.entities.is_empty() {
+            text.0 = "Targets: --\n[Tab] Next Target".to_string();
+            return;
+        }
+
+        let count = targets.entities.len();
+        let selected_label = targets
+            .entities
+            .get(targets.selected_index)
+            .map(|(_, _, label)| label.as_str())
+            .unwrap_or("--");
+
+        text.0 = format!(
+            "Targets: {}\n> {}\n[Tab] Next Target",
+            count, selected_label
+        );
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn update_debug_panel(
     debug_window: Res<DebugWindow>,
@@ -1046,11 +1106,16 @@ fn update_debug_panel(
     ships: Query<&Ship>,
     scouts: Query<&ScoutBehavior>,
     nodes: Query<(&SystemNode, &SystemIntel)>,
-    mut panel: Query<(&mut Text, &mut Visibility), With<DebugPanelText>>,
+    mut panel_container: Query<(&mut Visibility, &Children), With<DebugPanelText>>,
+    mut text_query: Query<&mut Text>,
 ) {
-    if let Some((mut text, mut visibility)) = panel.iter_mut().next() {
+    if let Ok((mut visibility, children)) = panel_container.single_mut() {
         if debug_window.open {
             *visibility = Visibility::Visible;
+
+            // Update the text in the child
+            for child in children.iter() {
+                if let Ok(mut text) = text_query.get_mut(child) {
 
             let mut body = String::from("=== DEBUG PANEL (F3 to close) ===\n\n");
 
@@ -1107,7 +1172,7 @@ fn update_debug_panel(
                 nodes.iter().count()
             ));
 
-            body.push_str("\nKeybinds:\n");
+            body.push_str("\nDebug Keybinds:\n");
             body.push_str("  -/= : change seed\n");
             body.push_str("  V   : reveal adjacent\n");
             body.push_str("  U   : reveal all\n");
@@ -1117,10 +1182,11 @@ fn update_debug_panel(
             body.push_str("  I   : refresh intel\n");
             body.push_str("  O   : advance intel\n");
             body.push_str("  K   : randomize modifiers\n");
-            body.push_str("  C   : cycle map zoom\n");
-            body.push_str("  H   : center camera\n");
 
-            text.0 = body;
+                    text.0 = body;
+                    break;
+                }
+            }
         } else {
             *visibility = Visibility::Hidden;
         }
@@ -1131,11 +1197,16 @@ fn view_is_map(view: Res<ViewMode>) -> bool {
     matches!(*view, ViewMode::Map)
 }
 
+fn view_is_world(view: Res<ViewMode>) -> bool {
+    matches!(*view, ViewMode::World)
+}
+
 fn sync_map_ui_visibility(
     view: Res<ViewMode>,
+    debug_window: Res<DebugWindow>,
     mut elements: Query<(&mut UiNode, Option<&MapUi>, Option<&WorldUi>)>,
 ) {
-    let display = if matches!(*view, ViewMode::Map) {
+    let display = if matches!(*view, ViewMode::Map) && !debug_window.open {
         Display::Flex
     } else {
         Display::None
@@ -1160,9 +1231,10 @@ fn sync_map_ui_visibility(
 fn sync_map_grid_visibility(
     view: Res<ViewMode>,
     toggles: Res<RenderToggles>,
+    debug_window: Res<DebugWindow>,
     mut roots: Query<&mut UiNode, With<MapGridRoot>>,
 ) {
-    let show = matches!(*view, ViewMode::Map) && toggles.grid_enabled();
+    let show = matches!(*view, ViewMode::Map) && toggles.grid_enabled() && !debug_window.open;
     let display = if show { Display::Flex } else { Display::None };
 
     for mut node in roots.iter_mut() {

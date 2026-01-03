@@ -2,6 +2,7 @@
 
 ## TL;DR
 - `docs/` is the canonical source of truth — treat specs as constraints
+- **TDD required** — write failing test first, then implement
 - FixedUpdate for all simulation; strict simulation/UI separation
 - No `unwrap()`/`expect()` — explicit error handling only
 - Ask before expanding scope
@@ -48,6 +49,27 @@ xstar-adventures/
 - Pure logic in testable modules
 - State transitions must be unit-tested
 
+### Testing
+- Tests go **in the same file**, at the bottom using `#[cfg(test)]` module
+- Do **not** create separate `tests/*.rs` files
+
+```rust
+// Example: src/station.rs
+pub fn calculate_efficiency(crew: u32, damage: f32) -> f32 {
+    // implementation
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn efficiency_scales_with_crew() {
+        // test implementation
+    }
+}
+```
+
 ---
 
 ## Commands
@@ -73,6 +95,16 @@ After writing or modifying code:
 ---
 
 ## Workflow
+
+### Test-Driven Development (Required)
+All new functionality must follow TDD:
+1. **Write the test first** — define expected behavior before implementation
+2. **Run test, see it fail** — confirms the test is actually testing something
+3. **Write minimal code to pass** — no more than necessary
+4. **Refactor** — clean up while tests stay green
+5. **Repeat**
+
+Do not write implementation code without a failing test first.
 
 ### Before Writing Code
 1. Check relevant docs in `docs/` for existing constraints

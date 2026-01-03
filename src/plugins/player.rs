@@ -3,10 +3,11 @@ use bevy::prelude::*;
 use crate::compat::SpatialBundle;
 
 use crate::ore::{mine_amount, OreKind, OreNode};
-use crate::pirates::PirateShip;
+use crate::pirates::{PirateBase, PirateShip};
 use crate::plugins::core::EventLog;
 use crate::plugins::core::InputBindings;
 use crate::plugins::core::SimConfig;
+use crate::plugins::core::ViewMode;
 use crate::ships::{Cargo, Ship, ShipState, Velocity};
 use crate::stations::{
     station_build_time_seconds, station_fuel_capacity, station_ore_capacity, Station, StationBuild,
@@ -19,22 +20,37 @@ pub struct PlayerPlugin;
 #[derive(Component, Debug, Default)]
 pub struct PlayerControl;
 
+#[derive(Resource, Default)]
+pub struct NearbyTargets {
+    pub entities: Vec<(Entity, Vec2, String)>,
+    pub selected_index: usize,
+}
+
 const PLAYER_THRUST_ACCELERATION: f32 = 200.0; // pixels per second squared
 const PLAYER_THRUST_FUEL_BURN_PER_MINUTE: f32 = 1.0;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            FixedUpdate,
-            (
-                player_movement,
-                player_mining,
-                player_fire,
-                player_refuel_station,
-                player_build_outpost,
+        app.init_resource::<NearbyTargets>()
+            .add_systems(
+                FixedUpdate,
+                (
+                    player_movement,
+                    player_mining,
+                    player_fire,
+                    player_refuel_station,
+                    player_build_outpost,
+                )
+                    .run_if(sim_not_paused),
             )
-                .run_if(sim_not_paused),
-        );
+            .add_systems(
+                FixedUpdate,
+                scan_nearby_entities.run_if(view_is_world),
+            )
+            .add_systems(
+                Update,
+                handle_tactical_selection.run_if(view_is_world),
+            );
     }
 }
 
@@ -443,6 +459,98 @@ fn closest_in_range(origin: Vec2, targets: &[Vec2], range: f32) -> Option<usize>
         }
     }
     closest
+}
+
+fn view_is_world(view: Res<ViewMode>) -> bool {
+    *view == ViewMode::World
+}
+
+fn scan_nearby_entities(
+    mut targets: ResMut<NearbyTargets>,
+    player_query: Query<&Transform, With<PlayerControl>>,
+    stations: Query<(Entity, &Transform, &Name), With<Station>>,
+    ore_nodes: Query<(Entity, &Transform), With<OreNode>>,
+    pirates: Query<(Entity, &Transform), With<PirateShip>>,
+    pirate_bases: Query<(Entity, &Transform), With<PirateBase>>,
+    ships: Query<(Entity, &Transform, &Ship), Without<PlayerControl>>,
+) {
+    let player_transform = match player_query.single() {
+        Ok(transform) => transform,
+        Err(_) => {
+            targets.entities.clear();
+            return;
+        }
+    };
+
+    let player_pos = Vec2::new(
+        player_transform.translation.x,
+        player_transform.translation.y,
+    );
+    let range = 400.0;
+
+    targets.entities.clear();
+
+    // Scan stations
+    for (entity, transform, name) in stations.iter() {
+        let pos = Vec2::new(transform.translation.x, transform.translation.y);
+        if pos.distance(player_pos) <= range {
+            targets.entities.push((entity, pos, name.to_string()));
+        }
+    }
+
+    // Scan ore nodes
+    for (entity, transform) in ore_nodes.iter() {
+        let pos = Vec2::new(transform.translation.x, transform.translation.y);
+        if pos.distance(player_pos) <= range {
+            targets.entities.push((entity, pos, "Ore Node".to_string()));
+        }
+    }
+
+    // Scan pirates
+    for (entity, transform) in pirates.iter() {
+        let pos = Vec2::new(transform.translation.x, transform.translation.y);
+        if pos.distance(player_pos) <= range {
+            targets.entities.push((entity, pos, "Pirate".to_string()));
+        }
+    }
+
+    // Scan pirate bases
+    for (entity, transform) in pirate_bases.iter() {
+        let pos = Vec2::new(transform.translation.x, transform.translation.y);
+        if pos.distance(player_pos) <= range {
+            targets.entities.push((entity, pos, "Pirate Base".to_string()));
+        }
+    }
+
+    // Scan other ships
+    for (entity, transform, ship) in ships.iter() {
+        let pos = Vec2::new(transform.translation.x, transform.translation.y);
+        if pos.distance(player_pos) <= range {
+            let label = format!("{:?} Ship", ship.kind);
+            targets.entities.push((entity, pos, label));
+        }
+    }
+
+    // Ensure selected_index is valid
+    if targets.selected_index >= targets.entities.len() && !targets.entities.is_empty() {
+        targets.selected_index = 0;
+    }
+}
+
+fn handle_tactical_selection(
+    input: Res<ButtonInput<KeyCode>>,
+    bindings: Res<InputBindings>,
+    mut targets: ResMut<NearbyTargets>,
+) {
+    if !input.just_pressed(bindings.cycle_target) {
+        return;
+    }
+
+    if targets.entities.is_empty() {
+        return;
+    }
+
+    targets.selected_index = (targets.selected_index + 1) % targets.entities.len();
 }
 
 #[cfg(test)]

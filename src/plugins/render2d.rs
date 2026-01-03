@@ -9,6 +9,7 @@ use crate::compat::{Camera2dBundle, SpriteBundle, Text2dBundle, TextBundle, Text
 use crate::ore::{OreKind, OreNode};
 use crate::pirates::{PirateBase, PirateShip};
 use crate::plugins::core::{DebugWindow, FogConfig, GameState, InputBindings, ViewMode};
+use crate::plugins::player::{NearbyTargets, PlayerControl};
 use crate::plugins::sim::{advance_intel_layer, refresh_intel};
 use crate::plugins::ui::{HoveredNode, MapUi};
 use crate::ships::{Ship, ShipKind};
@@ -31,6 +32,7 @@ impl Plugin for Render2DPlugin {
             .init_resource::<IntelRefreshCooldown>()
             .init_resource::<MapZoomOverride>()
             .init_resource::<FocusMarker>()
+            .init_resource::<HomeBeaconEnabled>()
             .add_systems(Startup, load_player_ship_texture)
             .add_systems(Startup, setup_camera)
             .add_systems(Startup, spawn_starfield)
@@ -93,6 +95,8 @@ impl Plugin for Render2DPlugin {
                     update_ship_visuals,
                     update_ship_labels,
                     draw_focus_marker,
+                    draw_tactical_navigation,
+                    draw_home_beacon,
                     sync_view_entities,
                 )
                     .run_if(in_state(GameState::InGame))
@@ -107,7 +111,14 @@ impl Plugin for Render2DPlugin {
             )
             .add_systems(
                 Update,
-                (center_camera_on_revealed, debug_player_components)
+                center_camera_on_revealed
+                    .after(sync_ship_visuals)
+                    .run_if(in_state(GameState::InGame))
+                    .run_if(view_is_world),
+            )
+            .add_systems(
+                Update,
+                debug_player_components
                     .after(sync_ship_visuals)
                     .run_if(in_state(GameState::InGame))
                     .run_if(view_is_world)
@@ -268,6 +279,11 @@ impl FocusMarker {
     pub fn node_id(&self) -> Option<u32> {
         self.node_id
     }
+}
+
+#[derive(Resource, Default)]
+struct HomeBeaconEnabled {
+    enabled: bool,
 }
 
 const PLAYER_SHIP_ASPECT: f32 = 860.0 / 1065.0;
@@ -431,10 +447,6 @@ fn sync_camera_view(
 
     if matches!(*view, ViewMode::Map) {
         let center = map_center(&sector);
-        info!(
-            "sync_camera_view: In Map mode, centering camera at ({:.1}, {:.1})",
-            center.x, center.y
-        );
         for mut transform in transforms.iter_mut() {
             transform.translation.x = center.x;
             transform.translation.y = center.y;
@@ -984,11 +996,14 @@ fn center_camera_on_revealed(
     nodes: Query<(&SystemNode, &SystemIntel)>,
     mut cameras: Query<&mut Transform, With<Camera2d>>,
     mut marker: ResMut<FocusMarker>,
+    mut beacon: ResMut<HomeBeaconEnabled>,
     mut log: ResMut<crate::plugins::core::EventLog>,
 ) {
     if !input.just_pressed(bindings.center_camera) {
         return;
     }
+
+    beacon.enabled = !beacon.enabled;
 
     let mut target = None;
     for (node, intel) in nodes.iter() {
@@ -1005,7 +1020,8 @@ fn center_camera_on_revealed(
         }
         marker.position = Some(target);
         marker.node_id = Some(node_id);
-        log.push(format!("World camera centered on node {}", node_id));
+        let beacon_status = if beacon.enabled { " | Beacon ON" } else { " | Beacon OFF" };
+        log.push(format!("World camera centered on node {}{}", node_id, beacon_status));
     } else {
         marker.position = None;
         marker.node_id = None;
@@ -1035,6 +1051,135 @@ fn draw_focus_marker(mut gizmos: Gizmos, marker: Res<FocusMarker>) {
         color,
     );
     gizmos.circle_2d(position, size * 0.6, Color::srgba(0.7, 0.85, 0.95, 0.35));
+}
+
+fn draw_tactical_navigation(
+    mut gizmos: Gizmos,
+    targets: Res<NearbyTargets>,
+    player_query: Query<&Transform, With<PlayerControl>>,
+) {
+    if targets.entities.is_empty() {
+        return;
+    }
+
+    let player_transform = match player_query.single() {
+        Ok(transform) => transform,
+        Err(_) => {
+            return;
+        }
+    };
+
+    let player_pos = Vec2::new(
+        player_transform.translation.x,
+        player_transform.translation.y,
+    );
+
+    let selected = match targets.entities.get(targets.selected_index) {
+        Some(target) => target,
+        None => {
+            return;
+        }
+    };
+
+    let target_pos = selected.1;
+    let distance = player_pos.distance(target_pos);
+    let arrow_color = Color::srgba(0.0, 1.0, 1.0, 0.8);
+    let circle_color = Color::srgba(1.0, 1.0, 0.0, 0.6);
+
+    const NEAR_THRESHOLD: f32 = 150.0;
+
+    if distance > NEAR_THRESHOLD {
+        let direction = (target_pos - player_pos).normalize_or_zero();
+        if direction.length_squared() < 0.01 {
+            return;
+        }
+
+        let arrow_offset = 40.0;
+        let arrow_length = 40.0;
+        let arrow_start = player_pos + direction * arrow_offset;
+        let arrow_end = arrow_start + direction * arrow_length;
+
+        gizmos.line_2d(arrow_start, arrow_end, arrow_color);
+
+        let tip_size = 8.0;
+        let perpendicular = Vec2::new(-direction.y, direction.x);
+        gizmos.line_2d(
+            arrow_end,
+            arrow_end - direction * tip_size + perpendicular * (tip_size * 0.5),
+            arrow_color,
+        );
+        gizmos.line_2d(
+            arrow_end,
+            arrow_end - direction * tip_size - perpendicular * (tip_size * 0.5),
+            arrow_color,
+        );
+    } else {
+        gizmos.circle_2d(target_pos, 20.0, circle_color);
+    }
+}
+
+const BEACON_ARROW_OFFSET: f32 = 40.0;
+const BEACON_ARROW_LENGTH: f32 = 40.0;
+const BEACON_TIP_SIZE: f32 = 8.0;
+
+fn draw_home_beacon(
+    mut gizmos: Gizmos,
+    beacon: Res<HomeBeaconEnabled>,
+    player_query: Query<&Transform, With<PlayerControl>>,
+    nodes: Query<(&SystemNode, &SystemIntel)>,
+) {
+    if !beacon.enabled {
+        return;
+    }
+
+    let player_transform = match player_query.single() {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+
+    let player_pos = Vec2::new(
+        player_transform.translation.x,
+        player_transform.translation.y,
+    );
+
+    let mut nearest: Option<Vec2> = None;
+    let mut best_dist = f32::MAX;
+
+    for (node, intel) in nodes.iter() {
+        if !intel.revealed {
+            continue;
+        }
+        let dist = node.position.distance(player_pos);
+        if dist < best_dist {
+            best_dist = dist;
+            nearest = Some(node.position);
+        }
+    }
+
+    if let Some(target) = nearest {
+        let direction = (target - player_pos).normalize_or_zero();
+        if direction.length_squared() < 0.01 {
+            return;
+        }
+
+        let arrow_start = player_pos + direction * BEACON_ARROW_OFFSET;
+        let arrow_end = arrow_start + direction * BEACON_ARROW_LENGTH;
+
+        let beacon_color = Color::srgba(0.0, 1.0, 1.0, 0.8);
+        gizmos.line_2d(arrow_start, arrow_end, beacon_color);
+
+        let perpendicular = Vec2::new(-direction.y, direction.x);
+        gizmos.line_2d(
+            arrow_end,
+            arrow_end - direction * BEACON_TIP_SIZE + perpendicular * (BEACON_TIP_SIZE * 0.5),
+            beacon_color,
+        );
+        gizmos.line_2d(
+            arrow_end,
+            arrow_end - direction * BEACON_TIP_SIZE - perpendicular * (BEACON_TIP_SIZE * 0.5),
+            beacon_color,
+        );
+    }
 }
 
 fn clear_focus_marker_on_map(mut marker: ResMut<FocusMarker>) {
@@ -1401,6 +1546,7 @@ fn update_node_labels(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     toggles: Res<RenderToggles>,
+    debug_window: Res<crate::plugins::core::DebugWindow>,
     ticks: Res<crate::plugins::sim::SimTickCount>,
     nodes: Query<(&SystemNode, &SystemIntel)>,
     labels: Query<Entity, With<NodeLabel>>,
@@ -1410,7 +1556,7 @@ fn update_node_labels(
         commands.entity(entity).despawn();
     }
 
-    if !toggles.show_nodes || !toggles.show_node_labels {
+    if !toggles.show_nodes || !toggles.show_node_labels || debug_window.open {
         return;
     }
 

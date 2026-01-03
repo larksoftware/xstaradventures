@@ -149,6 +149,7 @@ pub struct InputBindings {
     pub clear_reveal: KeyCode,
     pub map_zoom: KeyCode,
     pub center_camera: KeyCode,
+    pub cycle_target: KeyCode,
 }
 
 impl Default for InputBindings {
@@ -187,6 +188,7 @@ impl Default for InputBindings {
             clear_reveal: KeyCode::KeyZ,
             map_zoom: KeyCode::KeyC,
             center_camera: KeyCode::KeyH,
+            cycle_target: KeyCode::Tab,
         }
     }
 }

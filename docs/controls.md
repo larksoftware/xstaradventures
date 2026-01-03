@@ -7,7 +7,9 @@ This document lists the current bootstrap controls and what they affect.
 - `W` / `S`: apply forward/reverse thrust (Newtonian physics - ship maintains velocity).
 - `A` / `D`: rotate ship left/right.
 - `F`: interact (mine ore, refuel station, transfer ore, build outpost).
+- `H`: toggle home beacon arrow (points to nearest revealed node).
 - Left Mouse Button: fire weapon at pirates.
+- `Tab`: cycle through nearby tactical targets (shows arrow when far, circle when near).
 - `,` / `.`: decrease/increase scout fleet risk tolerance.
 
 **Note**: Movement uses realistic space physics. Thrust accelerates your ship in the direction it's facing. Ship will continue moving at current velocity until you apply counter-thrust to slow down or change direction.
@@ -30,7 +32,6 @@ Press `F3` to open/close the debug window. All debug commands only work when the
 - `Z`: clear reveals.
 - `B`: spawn FuelDepot.
 - `J`: spawn Scout.
-- `H`: center camera on revealed node and mark focus (world view).
 
 ### Map & Debug Rendering (debug window only)
 
