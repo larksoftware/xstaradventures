@@ -71,7 +71,7 @@ fn apply_seed_world(commands: &mut Commands, sector: &mut Sector, seed: u64) {
     sector.routes.clear();
 
     let mut rng = seed;
-    let node_count = 5;
+    let node_count = 50;
     let mut nodes = Vec::with_capacity(node_count);
 
     for index in 0..node_count {
@@ -129,7 +129,7 @@ fn apply_seed_world(commands: &mut Commands, sector: &mut Sector, seed: u64) {
     spawn_jump_gates(commands, &nodes, &sector.routes);
 
     spawn_starting_entities(commands, sector);
-    spawn_pirate_base(commands, sector);
+    spawn_pirates(commands, sector, &mut rng);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -413,7 +413,7 @@ fn spawn_ship_stub(commands: &mut Commands, node: &SystemNode) {
         Fleet {
             role: ship_default_role(ShipKind::Scout),
         },
-        ScoutBehavior::new(node.id, RiskTolerance::Balanced),
+        ScoutBehavior::new(node.id, RiskTolerance::Cautious),
         ShipFuelAlert::default(),
         ZoneId(node.id),
         Name::new("Ship-Scout"),
@@ -438,27 +438,106 @@ fn spawn_pirate(commands: &mut Commands, node: &SystemNode) {
     ));
 }
 
-fn spawn_pirate_base(commands: &mut Commands, sector: &Sector) {
-    let target = match sector.nodes.last() {
-        Some(node) => node,
-        None => {
-            return;
-        }
+/// Returns the set of zone IDs that are within 1 jump of the starter zone
+fn get_safe_zones(sector: &Sector) -> std::collections::HashSet<u32> {
+    let mut safe_zones = std::collections::HashSet::new();
+
+    let starter_id = match sector.nodes.first() {
+        Some(node) => node.id,
+        None => return safe_zones,
     };
 
-    commands.spawn((
-        PirateBase {
-            launch_interval_ticks: 300,
-            next_launch_tick: 120,
-        },
-        ZoneId(target.id),
-        Name::new("Pirate-Base"),
-        SpatialBundle::from_transform(Transform::from_xyz(
-            target.position.x + 50.0,
-            target.position.y - 30.0,
-            0.45,
-        )),
-    ));
+    safe_zones.insert(starter_id);
+
+    for route in &sector.routes {
+        if route.from == starter_id {
+            safe_zones.insert(route.to);
+        }
+        if route.to == starter_id {
+            safe_zones.insert(route.from);
+        }
+    }
+
+    safe_zones
+}
+
+fn spawn_pirates(commands: &mut Commands, sector: &Sector, rng: &mut u64) {
+    let safe_zones = get_safe_zones(sector);
+
+    // Get eligible zones (2+ jumps from starter)
+    let eligible_nodes: Vec<&SystemNode> = sector
+        .nodes
+        .iter()
+        .filter(|n| !safe_zones.contains(&n.id))
+        .collect();
+
+    if eligible_nodes.is_empty() {
+        return;
+    }
+
+    // ~10% of eligible zones should have pirates
+    let target_pirate_zone_count = (eligible_nodes.len() as f32 * 0.10).ceil() as usize;
+    let target_pirate_zone_count = target_pirate_zone_count.max(1);
+
+    // Randomly select zones for pirate presence
+    let mut selected_zones: Vec<&SystemNode> = Vec::new();
+    for node in &eligible_nodes {
+        if selected_zones.len() >= target_pirate_zone_count {
+            break;
+        }
+        let roll = next_unit(rng);
+        if roll < 0.15 {
+            // Slightly higher chance to reach ~10% target
+            selected_zones.push(node);
+        }
+    }
+
+    // If we didn't get enough, pick some deterministically
+    if selected_zones.is_empty() && !eligible_nodes.is_empty() {
+        selected_zones.push(eligible_nodes[0]);
+    }
+
+    // Spawn pirates in selected zones
+    for node in selected_zones {
+        // Spawn 0-5 pirates per zone
+        let pirate_count = (next_unit(rng) * 6.0) as usize;
+
+        for i in 0..pirate_count {
+            let angle = next_unit(rng) * std::f32::consts::TAU;
+            let radius = 30.0 + next_unit(rng) * 50.0;
+            let offset_x = angle.cos() * radius;
+            let offset_y = angle.sin() * radius;
+
+            commands.spawn((
+                PirateShip { speed: 70.0 },
+                ZoneId(node.id),
+                Name::new(format!("Pirate-Ship-{}-{}", node.id, i)),
+                SpatialBundle::from_transform(Transform::from_xyz(
+                    node.position.x + offset_x,
+                    node.position.y + offset_y,
+                    0.4,
+                )),
+            ));
+        }
+
+        // Max 1 pirate base per zone, ~50% chance for a zone with pirates to have a base
+        let spawn_base = next_unit(rng) < 0.5;
+        if spawn_base {
+            commands.spawn((
+                PirateBase {
+                    launch_interval_ticks: 300,
+                    next_launch_tick: 120,
+                },
+                ZoneId(node.id),
+                Name::new(format!("Pirate-Base-{}", node.id)),
+                SpatialBundle::from_transform(Transform::from_xyz(
+                    node.position.x + 50.0,
+                    node.position.y - 30.0,
+                    0.45,
+                )),
+            ));
+        }
+    }
 }
 
 /// Distance from node center to place gate
@@ -621,8 +700,8 @@ mod tests {
         apply_seed_world(&mut commands, &mut sector, 1337);
         queue.apply(&mut world);
 
-        assert_eq!(sector.nodes.len(), 5);
-        assert_eq!(sector.routes.len(), 5);
+        assert_eq!(sector.nodes.len(), 50);
+        assert_eq!(sector.routes.len(), 50);
     }
 
     #[test]
@@ -645,5 +724,183 @@ mod tests {
         let pirates: Vec<_> = query.iter(&world).collect();
         assert_eq!(pirates.len(), 1);
         assert_eq!(pirates[0].speed, 70.0);
+    }
+
+    #[test]
+    fn sector_generates_with_50_nodes() {
+        let mut world = World::default();
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        let mut sector = Sector::default();
+
+        apply_seed_world(&mut commands, &mut sector, 1337);
+        queue.apply(&mut world);
+
+        assert_eq!(sector.nodes.len(), 50);
+    }
+
+    #[test]
+    fn starter_zone_has_no_pirates() {
+        let mut world = World::default();
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        let mut sector = Sector::default();
+
+        apply_seed_world(&mut commands, &mut sector, 1337);
+        queue.apply(&mut world);
+
+        let starter_zone_id = sector.nodes.first().unwrap().id;
+
+        // Check for pirate ships in starter zone
+        let mut pirate_query = world.query::<(&PirateShip, &ZoneId)>();
+        for (_pirate, zone_id) in pirate_query.iter(&world) {
+            assert_ne!(zone_id.0, starter_zone_id, "Starter zone should have no pirates");
+        }
+
+        // Check for pirate bases in starter zone
+        let mut base_query = world.query::<(&PirateBase, &ZoneId)>();
+        for (_base, zone_id) in base_query.iter(&world) {
+            assert_ne!(zone_id.0, starter_zone_id, "Starter zone should have no pirate bases");
+        }
+    }
+
+    #[test]
+    fn zones_one_jump_from_starter_have_no_pirates() {
+        let mut world = World::default();
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        let mut sector = Sector::default();
+
+        apply_seed_world(&mut commands, &mut sector, 1337);
+        queue.apply(&mut world);
+
+        let starter_zone_id = sector.nodes.first().unwrap().id;
+
+        // Find zones directly connected to starter
+        let mut adjacent_zones: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        adjacent_zones.insert(starter_zone_id);
+        for route in &sector.routes {
+            if route.from == starter_zone_id {
+                adjacent_zones.insert(route.to);
+            }
+            if route.to == starter_zone_id {
+                adjacent_zones.insert(route.from);
+            }
+        }
+
+        // Check for pirate ships in adjacent zones
+        let mut pirate_query = world.query::<(&PirateShip, &ZoneId)>();
+        for (_pirate, zone_id) in pirate_query.iter(&world) {
+            assert!(
+                !adjacent_zones.contains(&zone_id.0),
+                "Zone {} is adjacent to starter and should have no pirates",
+                zone_id.0
+            );
+        }
+
+        // Check for pirate bases in adjacent zones
+        let mut base_query = world.query::<(&PirateBase, &ZoneId)>();
+        for (_base, zone_id) in base_query.iter(&world) {
+            assert!(
+                !adjacent_zones.contains(&zone_id.0),
+                "Zone {} is adjacent to starter and should have no pirate bases",
+                zone_id.0
+            );
+        }
+    }
+
+    #[test]
+    fn no_zone_has_more_than_one_pirate_base() {
+        let mut world = World::default();
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        let mut sector = Sector::default();
+
+        apply_seed_world(&mut commands, &mut sector, 1337);
+        queue.apply(&mut world);
+
+        let mut base_counts: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+        let mut base_query = world.query::<(&PirateBase, &ZoneId)>();
+        for (_base, zone_id) in base_query.iter(&world) {
+            *base_counts.entry(zone_id.0).or_insert(0) += 1;
+        }
+
+        for (zone_id, count) in base_counts {
+            assert!(count <= 1, "Zone {} has {} pirate bases, max is 1", zone_id, count);
+        }
+    }
+
+    #[test]
+    fn pirate_zones_have_zero_to_five_pirates() {
+        let mut world = World::default();
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        let mut sector = Sector::default();
+
+        apply_seed_world(&mut commands, &mut sector, 1337);
+        queue.apply(&mut world);
+
+        let mut pirate_counts: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+        let mut pirate_query = world.query::<(&PirateShip, &ZoneId)>();
+        for (_pirate, zone_id) in pirate_query.iter(&world) {
+            *pirate_counts.entry(zone_id.0).or_insert(0) += 1;
+        }
+
+        for (zone_id, count) in pirate_counts {
+            assert!(count <= 5, "Zone {} has {} pirates, max is 5", zone_id, count);
+        }
+    }
+
+    #[test]
+    fn approximately_ten_percent_of_eligible_zones_have_pirates() {
+        let mut world = World::default();
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        let mut sector = Sector::default();
+
+        apply_seed_world(&mut commands, &mut sector, 1337);
+        queue.apply(&mut world);
+
+        let starter_zone_id = sector.nodes.first().unwrap().id;
+
+        // Find zones within 1 jump of starter (ineligible for pirates)
+        let mut safe_zones: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        safe_zones.insert(starter_zone_id);
+        for route in &sector.routes {
+            if route.from == starter_zone_id {
+                safe_zones.insert(route.to);
+            }
+            if route.to == starter_zone_id {
+                safe_zones.insert(route.from);
+            }
+        }
+
+        let eligible_zone_count = sector.nodes.len() - safe_zones.len();
+
+        // Count zones with pirates
+        let mut zones_with_pirates: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut pirate_query = world.query::<(&PirateShip, &ZoneId)>();
+        for (_pirate, zone_id) in pirate_query.iter(&world) {
+            zones_with_pirates.insert(zone_id.0);
+        }
+        let mut base_query = world.query::<(&PirateBase, &ZoneId)>();
+        for (_base, zone_id) in base_query.iter(&world) {
+            zones_with_pirates.insert(zone_id.0);
+        }
+
+        let pirate_zone_count = zones_with_pirates.len();
+
+        // Allow some variance: expect ~10% but accept 5-20% range
+        let expected_min = (eligible_zone_count as f32 * 0.05) as usize;
+        let expected_max = (eligible_zone_count as f32 * 0.20) as usize;
+
+        assert!(
+            pirate_zone_count >= expected_min && pirate_zone_count <= expected_max,
+            "Expected {}-{} pirate zones (10% of {} eligible), got {}",
+            expected_min,
+            expected_max,
+            eligible_zone_count,
+            pirate_zone_count
+        );
     }
 }

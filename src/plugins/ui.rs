@@ -18,7 +18,7 @@ use crate::plugins::render2d::RenderToggles;
 use crate::plugins::sim::SimTickCount;
 use crate::plugins::worldgen::WorldSeed;
 use crate::ships::{Cargo, Ship};
-use crate::stations::{Station, StationKind, StationState};
+use crate::stations::Station;
 use crate::world::ZoneId;
 use crate::world::{
     zone_modifier_effect, KnowledgeLayer, Sector, SystemIntel, SystemNode, ZoneModifier,
@@ -37,7 +37,6 @@ impl Plugin for UIPlugin {
                 (
                     update_log_panel,
                     update_cooldown_panel,
-                    update_station_panel,
                     update_player_panel,
                     update_fleet_panel,
                     update_focus_panel,
@@ -62,10 +61,15 @@ impl Plugin for UIPlugin {
                     handle_contact_clicks,
                     update_contact_item_styles,
                     update_intel_panel,
+                    handle_fleet_clicks,
+                    update_fleet_item_styles,
+                    update_fleet_detail,
+                    handle_panel_scroll,
                 )
                     .run_if(view_is_world),
             )
-            .init_resource::<HoveredNode>();
+            .init_resource::<HoveredNode>()
+            .init_resource::<SelectedFleetUnit>();
     }
 }
 
@@ -250,13 +254,36 @@ impl PanelConfig {
 struct CooldownText;
 
 #[derive(Component)]
-struct StationPanelText;
-
-#[derive(Component)]
 struct FocusText;
 
 #[derive(Component)]
-struct FleetPanelText;
+struct FleetPanelMarker;
+
+#[derive(Component)]
+struct FleetListContainer;
+
+#[derive(Component)]
+struct FleetDetailText;
+
+/// Component marking a clickable fleet item in the Fleet panel
+#[derive(Component)]
+pub struct FleetItem {
+    pub index: usize,
+}
+
+/// Marker for empty state text in Fleet panel
+#[derive(Component)]
+struct FleetEmptyText;
+
+/// Marker for the divider between fleet list and detail
+#[derive(Component)]
+struct FleetDetailDivider;
+
+/// Tracks which fleet unit is selected for detail view
+#[derive(Resource, Default)]
+pub struct SelectedFleetUnit {
+    pub index: Option<usize>,
+}
 
 #[derive(Component)]
 struct PlayerPanelText;
@@ -517,15 +544,17 @@ fn setup_hud(mut commands: Commands, asset_server: Res<AssetServer>) {
                 },
             ));
 
-            // Divider
-            parent.spawn(TextBundle::from_section(
-                "------------------------",
-                TextStyle {
-                    font: font.clone(),
-                    font_size: 13.0,
-                    color: Color::srgb(0.5, 0.3, 0.6),
+            // Real divider line
+            parent.spawn(NodeBundle {
+                node: UiNode {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(1.0),
+                    margin: UiRect::vertical(Val::Px(4.0)),
+                    ..default()
                 },
-            ));
+                background_color: Color::srgb(0.4, 0.25, 0.5).into(),
+                ..default()
+            });
 
             // Content
             parent.spawn((
@@ -564,7 +593,7 @@ fn setup_hud(mut commands: Commands, asset_server: Res<AssetServer>) {
         HoverText,
         MapUi,
         TextBundle::from_section(
-            "Hover: --",
+            "",
             TextStyle {
                 font: font.clone(),
                 font_size: 14.0,
@@ -573,8 +602,7 @@ fn setup_hud(mut commands: Commands, asset_server: Res<AssetServer>) {
         )
         .with_node(UiNode {
             position_type: PositionType::Absolute,
-            right: Val::Px(14.0),
-            top: Val::Px(160.0),
+            display: Display::None,
             ..default()
         }),
     ));
@@ -708,44 +736,6 @@ fn setup_hud(mut commands: Commands, asset_server: Res<AssetServer>) {
     ));
 
     commands.spawn((
-        StationPanelText,
-        WorldUi,
-        TextBundle::from_section(
-            "Stations: --",
-            TextStyle {
-                font: font.clone(),
-                font_size: 14.0,
-                color: Color::srgb(0.7, 0.75, 0.82),
-            },
-        )
-        .with_node(UiNode {
-            position_type: PositionType::Absolute,
-            right: Val::Px(14.0),
-            top: Val::Px(340.0),
-            ..default()
-        }),
-    ));
-
-    commands.spawn((
-        FleetPanelText,
-        WorldUi,
-        TextBundle::from_section(
-            "Fleet: --",
-            TextStyle {
-                font: font.clone(),
-                font_size: 14.0,
-                color: Color::srgb(0.7, 0.75, 0.82),
-            },
-        )
-        .with_node(UiNode {
-            position_type: PositionType::Absolute,
-            right: Val::Px(14.0),
-            top: Val::Px(420.0),
-            ..default()
-        }),
-    ));
-
-    commands.spawn((
         FocusText,
         WorldUi,
         TextBundle::from_section(
@@ -763,6 +753,98 @@ fn setup_hud(mut commands: Commands, asset_server: Res<AssetServer>) {
             ..default()
         }),
     ));
+
+    // Fleet panel at top-right
+    commands
+        .spawn((
+            FleetPanelMarker,
+            WorldUi,
+            Interaction::None,
+            NodeBundle {
+                node: UiNode {
+                    position_type: PositionType::Absolute,
+                    right: Val::Px(14.0),
+                    top: Val::Px(14.0),
+                    flex_direction: FlexDirection::Column,
+                    padding: UiRect::all(Val::Px(8.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    min_width: Val::Px(200.0),
+                    max_height: Val::Px(180.0),
+                    overflow: Overflow {
+                        y: OverflowAxis::Scroll,
+                        ..default()
+                    },
+                    ..default()
+                },
+                background_color: Color::srgba(0.02, 0.05, 0.08, 0.85).into(),
+                border_color: Color::srgb(0.0, 0.8, 0.8).into(),
+                ..default()
+            },
+        ))
+        .with_children(|parent| {
+            // Title
+            parent.spawn(TextBundle::from_section(
+                "Fleet",
+                TextStyle {
+                    font: font.clone(),
+                    font_size: 13.0,
+                    color: Color::srgb(0.0, 1.0, 1.0),
+                },
+            ));
+
+            // Real divider line
+            parent.spawn(NodeBundle {
+                node: UiNode {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(1.0),
+                    margin: UiRect::vertical(Val::Px(4.0)),
+                    ..default()
+                },
+                background_color: Color::srgb(0.0, 0.5, 0.5).into(),
+                ..default()
+            });
+
+            // List container for fleet items (populated dynamically)
+            parent.spawn((
+                FleetListContainer,
+                NodeBundle {
+                    node: UiNode {
+                        flex_direction: FlexDirection::Column,
+                        ..default()
+                    },
+                    ..default()
+                },
+            ));
+
+            // Detail divider (hidden by default, shown when item selected)
+            parent.spawn((
+                FleetDetailDivider,
+                NodeBundle {
+                    node: UiNode {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(1.0),
+                        margin: UiRect::vertical(Val::Px(6.0)),
+                        ..default()
+                    },
+                    background_color: Color::srgb(0.0, 0.4, 0.4).into(),
+                    visibility: Visibility::Hidden,
+                    ..default()
+                },
+            ));
+
+            // Detail section (shown when a fleet unit is selected)
+            parent.spawn((
+                FleetDetailText,
+                TextBundle::from_section(
+                    "",
+                    TextStyle {
+                        font: font.clone(),
+                        font_size: 11.0,
+                        color: Color::srgb(0.5, 0.7, 0.7),
+                    },
+                ),
+            ));
+        });
 
     // Wrapper container for Intel + Contacts panels at bottom-right
     commands
@@ -814,15 +896,17 @@ fn setup_hud(mut commands: Commands, asset_server: Res<AssetServer>) {
                         },
                     ));
 
-                    // Divider
-                    intel.spawn(TextBundle::from_section(
-                        "--------",
-                        TextStyle {
-                            font: font.clone(),
-                            font_size: 13.0,
-                            color: Color::srgb(0.0, 0.7, 0.7),
+                    // Real divider line
+                    intel.spawn(NodeBundle {
+                        node: UiNode {
+                            width: Val::Percent(100.0),
+                            height: Val::Px(1.0),
+                            margin: UiRect::vertical(Val::Px(4.0)),
+                            ..default()
                         },
-                    ));
+                        background_color: Color::srgb(0.0, 0.5, 0.5).into(),
+                        ..default()
+                    });
 
                     // Content (will be updated dynamically)
                     intel.spawn((
@@ -842,6 +926,8 @@ fn setup_hud(mut commands: Commands, asset_server: Res<AssetServer>) {
             parent
                 .spawn((
                     TacticalPanelText,
+                    Interaction::default(),
+                    ScrollPosition::default(),
                     NodeBundle {
                         node: UiNode {
                             flex_direction: FlexDirection::Column,
@@ -871,15 +957,17 @@ fn setup_hud(mut commands: Commands, asset_server: Res<AssetServer>) {
                         },
                     ));
 
-                    // Divider
-                    contacts.spawn(TextBundle::from_section(
-                        "--------",
-                        TextStyle {
-                            font: font.clone(),
-                            font_size: 13.0,
-                            color: Color::srgb(0.0, 0.7, 0.7),
+                    // Real divider line
+                    contacts.spawn(NodeBundle {
+                        node: UiNode {
+                            width: Val::Percent(100.0),
+                            height: Val::Px(1.0),
+                            margin: UiRect::vertical(Val::Px(4.0)),
+                            ..default()
                         },
-                    ));
+                        background_color: Color::srgb(0.0, 0.5, 0.5).into(),
+                        ..default()
+                    });
 
                     // Container for contact items (will be populated dynamically)
                     contacts.spawn((
@@ -943,9 +1031,13 @@ fn setup_debug_panel(mut commands: Commands, asset_server: Res<AssetServer>) {
         });
 }
 
-fn update_hud(view: Res<ViewMode>, mut hud_text: Query<&mut Text, With<HudText>>) {
+fn update_hud(
+    view: Res<ViewMode>,
+    ticks: Res<SimTickCount>,
+    mut hud_text: Query<&mut Text, With<HudText>>,
+) {
     if let Some(mut text) = hud_text.iter_mut().next() {
-        text.0 = format!("View: {:?} | F3: Debug", *view);
+        text.0 = format!("View: {:?} | t{} | F3: Debug", *view, ticks.tick);
     }
 }
 
@@ -1029,7 +1121,6 @@ fn modifier_to_long(modifier: Option<ZoneModifier>) -> &'static str {
 
 fn update_hover_panel(
     hovered: Res<HoveredNode>,
-    sector: Res<Sector>,
     mut panel: Query<(&mut Text, &mut UiNode), With<HoverText>>,
 ) {
     if let Some((mut text, mut node)) = panel.iter_mut().next() {
@@ -1038,24 +1129,27 @@ fn update_hover_panel(
                 let layer = hovered.layer.unwrap_or(KnowledgeLayer::Existence);
                 let modifier = modifier_to_short(hovered.modifier);
                 let modifier_long = modifier_to_long(hovered.modifier);
-                let (route_risk, modifier_risk) = risk_breakdown(&sector);
                 text.0 = format!(
-                    "Hover: {} L{} {:.0}% {} {} | Risk r{:.2} m{:.2}",
+                    "{} | L{} {:.0}% {} {}",
                     id,
                     layer_to_short(layer),
                     hovered.confidence * 100.0,
                     modifier,
                     modifier_long,
-                    route_risk,
-                    modifier_risk
                 );
                 node.display = Display::Flex;
-                node.left = Val::Px(pos.x + 16.0);
-                node.top = Val::Px((hovered.screen_size.y - pos.y) + 16.0);
+                // Reset right to auto so left takes effect
+                node.right = Val::Auto;
+                node.left = Val::Px(pos.x + 20.0);
+                // Position slightly below cursor (screen Y is top-down for UI)
+                node.top = Val::Px(pos.y + 20.0);
             }
             _ => {
-                text.0 = "Hover: --".to_string();
                 node.display = Display::None;
+                // Move offscreen and clear text to prevent any flash
+                node.left = Val::Px(-1000.0);
+                node.top = Val::Px(-1000.0);
+                text.0.clear();
             }
         }
     }
@@ -1138,109 +1232,6 @@ fn update_cooldown_panel(
     }
 }
 
-fn update_station_panel(
-    stations: Query<(
-        &Station,
-        Option<&crate::stations::StationBuild>,
-        Option<&crate::stations::StationCrisis>,
-    )>,
-    mut panel: Query<&mut Text, With<StationPanelText>>,
-) {
-    if let Some(mut text) = panel.iter_mut().next() {
-        if stations.is_empty() {
-            text.0 = "Stations: --".to_string();
-            return;
-        }
-
-        let mut kind_counts = std::collections::BTreeMap::new();
-        let mut state_counts = std::collections::BTreeMap::new();
-        let mut fuel_sum = 0.0;
-        let mut fuel_capacity_sum = 0.0;
-
-        let mut build_remaining = None;
-
-        let mut crisis_count = 0u32;
-        let mut fuel_crisis = 0u32;
-        let mut pirate_crisis = 0u32;
-
-        for (station, build, crisis) in stations.iter() {
-            let kind_key = match station.kind {
-                StationKind::MiningOutpost => "Mine",
-                StationKind::FuelDepot => "Fuel",
-                StationKind::SensorStation => "Sensor",
-            };
-            let state_key = match station.state {
-                StationState::Deploying => "Deploy",
-                StationState::Operational => "Op",
-                StationState::Strained => "Strain",
-                StationState::Failing => "Fail",
-                StationState::Failed => "Dead",
-            };
-
-            let kind_entry = kind_counts.entry(kind_key).or_insert(0u32);
-            *kind_entry += 1;
-
-            let state_entry = state_counts.entry(state_key).or_insert(0u32);
-            *state_entry += 1;
-
-            fuel_sum += station.fuel;
-            fuel_capacity_sum += station.fuel_capacity;
-
-            if let Some(build) = build {
-                if build_remaining.is_none_or(|current| build.remaining_seconds > current) {
-                    build_remaining = Some(build.remaining_seconds);
-                }
-            }
-
-            if crisis.is_some() {
-                crisis_count += 1;
-                if let Some(crisis) = crisis {
-                    match crisis.crisis_type {
-                        crate::stations::CrisisType::FuelShortage => fuel_crisis += 1,
-                        crate::stations::CrisisType::PirateHarassment => pirate_crisis += 1,
-                    }
-                }
-            }
-        }
-
-        let kind_summary = kind_counts
-            .iter()
-            .map(|(key, count)| format!("{}:{}", key, count))
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        let state_summary = state_counts
-            .iter()
-            .map(|(key, count)| format!("{}:{}", key, count))
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        let fuel_pct = if fuel_capacity_sum > 0.0 {
-            (fuel_sum / fuel_capacity_sum) * 100.0
-        } else {
-            0.0
-        };
-
-        let crisis_breakdown = if crisis_count > 0 {
-            format!("Fuel {} | Pirate {}", fuel_crisis, pirate_crisis)
-        } else {
-            "None".to_string()
-        };
-
-        if let Some(remaining) = build_remaining {
-            text.0 = format!(
-                "Stations: {} | {} | Fuel {:.0}% | Build {:.0}s | Crisis {}",
-                kind_summary, state_summary, fuel_pct, remaining, crisis_breakdown
-            );
-        } else {
-            text.0 = format!(
-                "Stations: {} | {} | Fuel {:.0}% | Crisis {}",
-                kind_summary, state_summary, fuel_pct, crisis_breakdown
-            );
-        }
-    }
-}
-
 fn update_player_panel(
     player: Query<(&Ship, &Cargo, &ZoneId), With<PlayerControl>>,
     mut panel: Query<&mut Text, With<PlayerPanelText>>,
@@ -1271,48 +1262,206 @@ fn update_player_panel(
 }
 
 fn update_fleet_panel(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
     scouts: Query<&ScoutBehavior>,
-    mut panel: Query<&mut Text, With<FleetPanelText>>,
+    selected: Res<SelectedFleetUnit>,
+    container_query: Query<Entity, With<FleetListContainer>>,
+    existing_items: Query<Entity, With<FleetItem>>,
+    empty_text: Query<Entity, With<FleetEmptyText>>,
+) {
+    use crate::fleets::ScoutPhase;
+    use std::path::Path;
+
+    let font_path = "fonts/SpaceMono-Regular.ttf";
+    let font_on_disk = Path::new("assets").join(font_path);
+    if !font_on_disk.exists() {
+        return;
+    }
+    let font = asset_server.load(font_path);
+
+    // Get the container
+    let Ok(container_entity) = container_query.single() else {
+        return;
+    };
+
+    // Despawn existing items and empty text
+    for item_entity in existing_items.iter() {
+        commands.entity(item_entity).despawn();
+    }
+    for empty_entity in empty_text.iter() {
+        commands.entity(empty_entity).despawn();
+    }
+
+    // Collect scout data
+    let scout_data: Vec<_> = scouts.iter().collect();
+
+    // Spawn new items
+    commands.entity(container_entity).with_children(|parent| {
+        if scout_data.is_empty() {
+            parent.spawn((
+                FleetEmptyText,
+                TextBundle::from_section(
+                    "(no units)",
+                    TextStyle {
+                        font: font.clone(),
+                        font_size: 12.0,
+                        color: Color::srgb(0.4, 0.6, 0.6),
+                    },
+                ),
+            ));
+        } else {
+            for (index, scout) in scout_data.iter().enumerate() {
+                let phase_short = match scout.phase {
+                    ScoutPhase::Scanning => "Scan",
+                    ScoutPhase::Investigating => "Invest",
+                    ScoutPhase::ZoneComplete => "Ready",
+                    ScoutPhase::TravelingToGate => "Travel",
+                    ScoutPhase::Jumping => "Jump",
+                    ScoutPhase::Complete => "Done",
+                };
+
+                // Compact format: "Scout-1  Z12348  Scan"
+                let text_content = format!(
+                    "Scout-{}  Z{}  {}",
+                    index + 1,
+                    scout.current_zone,
+                    phase_short
+                );
+
+                let is_selected = selected.index == Some(index);
+                let color = contact_item_color(is_selected, false);
+
+                parent.spawn((
+                    FleetItem { index },
+                    Interaction::None,
+                    TextBundle::from_section(
+                        text_content,
+                        TextStyle {
+                            font: font.clone(),
+                            font_size: 12.0,
+                            color,
+                        },
+                    ),
+                ));
+            }
+        }
+    });
+}
+
+fn handle_fleet_clicks(
+    mouse: Res<ButtonInput<MouseButton>>,
+    mut selected: ResMut<SelectedFleetUnit>,
+    items: Query<(&Interaction, &FleetItem)>,
+    panel: Query<&Interaction, With<FleetPanelMarker>>,
+) {
+    // Check if any fleet item was clicked
+    for (interaction, fleet_item) in items.iter() {
+        if matches!(interaction, Interaction::Pressed) {
+            // Toggle selection: if already selected, deselect; otherwise select
+            if selected.index == Some(fleet_item.index) {
+                selected.index = None;
+            } else {
+                selected.index = Some(fleet_item.index);
+            }
+            return;
+        }
+    }
+
+    // If mouse was just pressed and we didn't click a fleet item, check if we're outside panel
+    if mouse.just_pressed(MouseButton::Left) {
+        let panel_hovered = panel
+            .iter()
+            .any(|i| matches!(i, Interaction::Hovered | Interaction::Pressed));
+
+        if !panel_hovered {
+            selected.index = None;
+        }
+    }
+}
+
+fn update_fleet_item_styles(
+    selected: Res<SelectedFleetUnit>,
+    mut items: Query<(&Interaction, &FleetItem, &mut TextColor)>,
+) {
+    for (interaction, fleet_item, mut text_color) in items.iter_mut() {
+        let is_selected = selected.index == Some(fleet_item.index);
+        let is_hovered = matches!(interaction, Interaction::Hovered);
+        text_color.0 = contact_item_color(is_selected, is_hovered);
+    }
+}
+
+fn update_fleet_detail(
+    scouts: Query<&ScoutBehavior>,
+    selected: Res<SelectedFleetUnit>,
+    mut detail_text: Query<&mut Text, With<FleetDetailText>>,
+    mut divider: Query<&mut Visibility, With<FleetDetailDivider>>,
 ) {
     use crate::fleets::ScoutPhase;
 
-    if let Some(mut text) = panel.iter_mut().next() {
-        if scouts.is_empty() {
-            text.0 = "Fleet: --".to_string();
-            return;
+    let mut text = match detail_text.single_mut() {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+
+    let mut divider_vis = match divider.single_mut() {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let Some(selected_index) = selected.index else {
+        text.0 = String::new();
+        *divider_vis = Visibility::Hidden;
+        return;
+    };
+
+    // Find the scout at the selected index
+    let scout_data: Vec<_> = scouts.iter().collect();
+    let Some(scout) = scout_data.get(selected_index) else {
+        text.0 = String::new();
+        *divider_vis = Visibility::Hidden;
+        return;
+    };
+
+    // Show the divider when we have detail to show
+    *divider_vis = Visibility::Inherited;
+
+    let risk_label = match scout.risk {
+        RiskTolerance::Cautious => "Cautious",
+        RiskTolerance::Balanced => "Balanced",
+        RiskTolerance::Bold => "Bold",
+    };
+
+    let phase_label = match scout.phase {
+        ScoutPhase::Scanning => "Scanning area",
+        ScoutPhase::Investigating => "Investigating contacts",
+        ScoutPhase::ZoneComplete => "Zone complete",
+        ScoutPhase::TravelingToGate => "En route to gate",
+        ScoutPhase::Jumping => "Jumping...",
+        ScoutPhase::Complete => "Exploration complete",
+    };
+
+    let mut lines = Vec::new();
+    lines.push(format!("Risk: {}", risk_label));
+    lines.push(format!("Status: {}", phase_label));
+    lines.push(format!("Gates queued: {}", scout.gates_to_explore.len()));
+    lines.push(format!("Zones visited: {}", scout.visited_zones.len()));
+
+    text.0 = lines.join("\n");
+}
+
+#[allow(deprecated)]
+fn handle_panel_scroll(
+    mut scroll_events: EventReader<bevy::input::mouse::MouseWheel>,
+    mut scrollable: Query<(&Interaction, &mut ScrollPosition)>,
+) {
+    for event in scroll_events.read() {
+        for (interaction, mut scroll_pos) in scrollable.iter_mut() {
+            if matches!(interaction, Interaction::Hovered) {
+                scroll_pos.y -= event.y * 20.0;
+                scroll_pos.y = scroll_pos.y.max(0.0);
+            }
         }
-
-        let mut risk = RiskTolerance::Balanced;
-        let mut phase = ScoutPhase::Scanning;
-        let mut current_zone = 0u32;
-        let mut gates_count = 0usize;
-        let mut visited_count = 0usize;
-
-        if let Some(scout) = scouts.iter().next() {
-            risk = scout.risk;
-            phase = scout.phase;
-            current_zone = scout.current_zone;
-            gates_count = scout.gates_to_explore.len();
-            visited_count = scout.visited_zones.len();
-        }
-
-        let risk_label = match risk {
-            RiskTolerance::Cautious => "Cautious",
-            RiskTolerance::Balanced => "Balanced",
-            RiskTolerance::Bold => "Bold",
-        };
-
-        let phase_label = match phase {
-            ScoutPhase::Scanning => "Scanning",
-            ScoutPhase::TravelingToGate => "Traveling",
-            ScoutPhase::Jumping => "Jumping",
-            ScoutPhase::Complete => "Complete",
-        };
-
-        text.0 = format!(
-            "Fleet: Scout | {} | Zone {} | {} | Gates {} | Visited {}",
-            risk_label, current_zone, phase_label, gates_count, visited_count
-        );
     }
 }
 

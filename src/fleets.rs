@@ -12,9 +12,13 @@ pub enum RiskTolerance {
 /// Current phase of scout exploration
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default)]
 pub enum ScoutPhase {
-    /// Scanning resources and gates in current zone
+    /// Actively scanning the zone (takes time)
     #[default]
     Scanning,
+    /// Investigating unidentified contacts
+    Investigating,
+    /// Zone fully explored, ready to move to next
+    ZoneComplete,
     /// Traveling to a jump gate
     TravelingToGate,
     /// Currently jumping through a gate
@@ -22,6 +26,68 @@ pub enum ScoutPhase {
     /// No more zones to explore
     Complete,
 }
+
+/// Contact status for scout investigation
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum ContactStatus {
+    /// Detected but not yet identified
+    Unidentified,
+    /// Fully identified (scout got within range)
+    Identified,
+    /// Skipped (e.g., ship type - potentially hostile)
+    Skipped,
+}
+
+/// Type of contact detected by scout
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum ContactType {
+    Unknown,
+    Asteroid,
+    Station,
+    JumpGate,
+    Ship,
+    PirateShip,
+    PirateBase,
+}
+
+/// A contact discovered by the scout
+#[derive(Clone, Debug)]
+pub struct ScoutContact {
+    pub entity: Entity,
+    pub position: Vec2,
+    pub contact_type: ContactType,
+    pub status: ContactStatus,
+}
+
+impl ScoutContact {
+    pub fn new_unidentified(entity: Entity, position: Vec2) -> Self {
+        Self {
+            entity,
+            position,
+            contact_type: ContactType::Unknown,
+            status: ContactStatus::Unidentified,
+        }
+    }
+
+    pub fn new_pirate(entity: Entity, position: Vec2, is_base: bool) -> Self {
+        Self {
+            entity,
+            position,
+            contact_type: if is_base {
+                ContactType::PirateBase
+            } else {
+                ContactType::PirateShip
+            },
+            status: ContactStatus::Identified,
+        }
+    }
+}
+
+/// Duration of a zone scan in seconds
+pub const SCAN_DURATION_SECONDS: f32 = 5.0;
+
+/// Distance required to identify a contact
+pub const IDENTIFY_RANGE: f32 = 150.0;
 
 #[derive(Component, Debug)]
 pub struct ScoutBehavior {
@@ -41,6 +107,14 @@ pub struct ScoutBehavior {
     /// Jump transition state
     pub jump_remaining_seconds: f32,
     pub jump_destination: Option<u32>,
+    /// Remaining scan time in current zone
+    pub scan_remaining_seconds: f32,
+    /// Contacts discovered in current zone
+    pub contacts: Vec<ScoutContact>,
+    /// Index of current contact being investigated
+    pub current_contact_index: usize,
+    /// Number of pirates detected in current zone (for alerting)
+    pub pirates_detected: u32,
 }
 
 #[allow(dead_code)]
@@ -95,7 +169,106 @@ impl ScoutBehavior {
             target_position: None,
             jump_remaining_seconds: 0.0,
             jump_destination: None,
+            scan_remaining_seconds: SCAN_DURATION_SECONDS,
+            contacts: Vec::new(),
+            current_contact_index: 0,
+            pirates_detected: 0,
         }
+    }
+
+    /// Start scanning the current zone
+    pub fn start_scan(&mut self) {
+        self.phase = ScoutPhase::Scanning;
+        self.scan_remaining_seconds = SCAN_DURATION_SECONDS;
+        self.contacts.clear();
+        self.current_contact_index = 0;
+        self.pirates_detected = 0;
+    }
+
+    /// Advance the scan timer by delta_seconds, returns true if scan completed
+    pub fn advance_scan(&mut self, delta_seconds: f32) -> bool {
+        if self.scan_remaining_seconds > 0.0 {
+            self.scan_remaining_seconds -= delta_seconds;
+            if self.scan_remaining_seconds <= 0.0 {
+                self.scan_remaining_seconds = 0.0;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Check if scan is complete
+    #[allow(dead_code)]
+    pub fn is_scan_complete(&self) -> bool {
+        self.scan_remaining_seconds <= 0.0
+    }
+
+    /// Add an unidentified contact discovered during scan
+    pub fn add_contact(&mut self, entity: Entity, position: Vec2) {
+        self.contacts
+            .push(ScoutContact::new_unidentified(entity, position));
+    }
+
+    /// Add a pirate contact (identified immediately during scan)
+    pub fn add_pirate_contact(&mut self, entity: Entity, position: Vec2, is_base: bool) {
+        self.contacts
+            .push(ScoutContact::new_pirate(entity, position, is_base));
+        self.pirates_detected += 1;
+    }
+
+    /// Get the next unidentified non-ship contact to investigate
+    pub fn next_contact_to_investigate(&self) -> Option<&ScoutContact> {
+        self.contacts.iter().find(|c| {
+            matches!(c.status, ContactStatus::Unidentified)
+                && !matches!(c.contact_type, ContactType::Ship | ContactType::PirateShip)
+        })
+    }
+
+    /// Get mutable reference to contact by index
+    #[allow(dead_code)]
+    pub fn get_contact_mut(&mut self, index: usize) -> Option<&mut ScoutContact> {
+        self.contacts.get_mut(index)
+    }
+
+    /// Find contact index by entity
+    #[allow(dead_code)]
+    pub fn find_contact_index(&self, entity: Entity) -> Option<usize> {
+        self.contacts.iter().position(|c| c.entity == entity)
+    }
+
+    /// Identify a contact with its actual type
+    pub fn identify_contact(&mut self, entity: Entity, contact_type: ContactType) {
+        if let Some(contact) = self.contacts.iter_mut().find(|c| c.entity == entity) {
+            contact.contact_type = contact_type;
+            contact.status = ContactStatus::Identified;
+        }
+    }
+
+    /// Skip a contact (e.g., it's a ship type)
+    #[allow(dead_code)]
+    pub fn skip_contact(&mut self, entity: Entity) {
+        if let Some(contact) = self.contacts.iter_mut().find(|c| c.entity == entity) {
+            contact.status = ContactStatus::Skipped;
+        }
+    }
+
+    /// Check if all contacts have been processed (identified or skipped)
+    #[allow(dead_code)]
+    pub fn all_contacts_processed(&self) -> bool {
+        self.contacts
+            .iter()
+            .all(|c| matches!(c.status, ContactStatus::Identified | ContactStatus::Skipped))
+    }
+
+    /// Transition to investigation phase after scan completes
+    pub fn begin_investigation(&mut self) {
+        self.phase = ScoutPhase::Investigating;
+        self.current_contact_index = 0;
+    }
+
+    /// Mark zone as complete and ready to move on
+    pub fn complete_zone(&mut self) {
+        self.phase = ScoutPhase::ZoneComplete;
     }
 
     /// Mark a zone as visited
@@ -239,10 +412,11 @@ pub fn find_path_to_unvisited_zone(
 #[cfg(test)]
 mod tests {
     use super::{
-        find_path_to_unvisited_zone, next_risk, risk_threshold, scout_confidence, RiskTolerance,
-        ScoutBehavior, ScoutPhase,
+        find_path_to_unvisited_zone, next_risk, risk_threshold, scout_confidence, ContactStatus,
+        ContactType, RiskTolerance, ScoutBehavior, ScoutPhase, IDENTIFY_RANGE,
+        SCAN_DURATION_SECONDS,
     };
-    use bevy::prelude::Entity;
+    use bevy::prelude::{Entity, Vec2};
     use std::collections::HashSet;
 
     #[test]
@@ -490,5 +664,261 @@ mod tests {
         // No gates discovered, exploration is complete
         assert!(scout.is_exploration_complete());
         assert_eq!(scout.phase, ScoutPhase::Scanning);
+    }
+
+    // --- Scanning phase tests ---
+
+    #[test]
+    fn scan_takes_measurable_time() {
+        let scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
+        // Scan should take SCAN_DURATION_SECONDS, not be instant
+        assert!(SCAN_DURATION_SECONDS > 0.0);
+        assert_eq!(scout.scan_remaining_seconds, SCAN_DURATION_SECONDS);
+        assert!(!scout.is_scan_complete());
+    }
+
+    #[test]
+    fn scan_advances_with_time() {
+        let mut scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
+        let initial = scout.scan_remaining_seconds;
+
+        // Advance by 1 second
+        let completed = scout.advance_scan(1.0);
+
+        assert!(!completed);
+        assert!(scout.scan_remaining_seconds < initial);
+        assert_eq!(scout.scan_remaining_seconds, initial - 1.0);
+    }
+
+    #[test]
+    fn scan_completes_after_duration() {
+        let mut scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
+
+        // Advance past the full scan duration
+        let completed = scout.advance_scan(SCAN_DURATION_SECONDS + 1.0);
+
+        assert!(completed);
+        assert!(scout.is_scan_complete());
+        assert_eq!(scout.scan_remaining_seconds, 0.0);
+    }
+
+    #[test]
+    fn scan_reveals_contacts_as_unidentified() {
+        let mut scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
+        let entity = Entity::from_bits(1);
+        let pos = Vec2::new(100.0, 200.0);
+
+        scout.add_contact(entity, pos);
+
+        assert_eq!(scout.contacts.len(), 1);
+        assert_eq!(scout.contacts[0].status, ContactStatus::Unidentified);
+        assert_eq!(scout.contacts[0].contact_type, ContactType::Unknown);
+    }
+
+    #[test]
+    fn scan_detects_pirates_immediately() {
+        let mut scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
+        let pirate_entity = Entity::from_bits(1);
+        let pos = Vec2::new(100.0, 200.0);
+
+        scout.add_pirate_contact(pirate_entity, pos, false);
+
+        assert_eq!(scout.contacts.len(), 1);
+        assert_eq!(scout.contacts[0].status, ContactStatus::Identified);
+        assert_eq!(scout.contacts[0].contact_type, ContactType::PirateShip);
+        assert_eq!(scout.pirates_detected, 1);
+    }
+
+    #[test]
+    fn scan_detects_pirate_bases_immediately() {
+        let mut scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
+        let base_entity = Entity::from_bits(1);
+        let pos = Vec2::new(100.0, 200.0);
+
+        scout.add_pirate_contact(base_entity, pos, true);
+
+        assert_eq!(scout.contacts[0].contact_type, ContactType::PirateBase);
+        assert_eq!(scout.pirates_detected, 1);
+    }
+
+    // --- Investigation phase tests ---
+
+    #[test]
+    fn scout_transitions_to_investigating_after_scan() {
+        let mut scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
+        scout.add_contact(Entity::from_bits(1), Vec2::new(100.0, 100.0));
+
+        // Complete scan
+        scout.advance_scan(SCAN_DURATION_SECONDS + 1.0);
+        scout.begin_investigation();
+
+        assert_eq!(scout.phase, ScoutPhase::Investigating);
+    }
+
+    #[test]
+    fn scout_finds_next_unidentified_contact() {
+        let mut scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
+        let entity1 = Entity::from_bits(1);
+        let entity2 = Entity::from_bits(2);
+
+        scout.add_contact(entity1, Vec2::new(100.0, 100.0));
+        scout.add_contact(entity2, Vec2::new(200.0, 200.0));
+
+        let next = scout.next_contact_to_investigate();
+        assert!(next.is_some());
+        assert_eq!(next.unwrap().entity, entity1);
+    }
+
+    #[test]
+    fn contact_identified_updates_status() {
+        let mut scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
+        let entity = Entity::from_bits(1);
+
+        scout.add_contact(entity, Vec2::new(100.0, 100.0));
+        scout.identify_contact(entity, ContactType::Asteroid);
+
+        assert_eq!(scout.contacts[0].status, ContactStatus::Identified);
+        assert_eq!(scout.contacts[0].contact_type, ContactType::Asteroid);
+    }
+
+    #[test]
+    fn scout_skips_ship_contacts() {
+        let mut scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
+        let ship_entity = Entity::from_bits(1);
+        let asteroid_entity = Entity::from_bits(2);
+
+        // Add contacts - ship should be skipped
+        scout.add_contact(ship_entity, Vec2::new(100.0, 100.0));
+        scout.contacts[0].contact_type = ContactType::Ship;
+        scout.add_contact(asteroid_entity, Vec2::new(200.0, 200.0));
+
+        // Next contact to investigate should skip the ship
+        let next = scout.next_contact_to_investigate();
+        assert!(next.is_some());
+        assert_eq!(next.unwrap().entity, asteroid_entity);
+    }
+
+    #[test]
+    fn scout_moves_to_next_contact_after_identification() {
+        let mut scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
+        let entity1 = Entity::from_bits(1);
+        let entity2 = Entity::from_bits(2);
+
+        scout.add_contact(entity1, Vec2::new(100.0, 100.0));
+        scout.add_contact(entity2, Vec2::new(200.0, 200.0));
+
+        // Identify first contact
+        scout.identify_contact(entity1, ContactType::Asteroid);
+
+        // Next should be the second contact
+        let next = scout.next_contact_to_investigate();
+        assert!(next.is_some());
+        assert_eq!(next.unwrap().entity, entity2);
+    }
+
+    #[test]
+    fn identify_range_is_150_units() {
+        assert_eq!(IDENTIFY_RANGE, 150.0);
+    }
+
+    // --- Zone completion tests ---
+
+    #[test]
+    fn zone_not_complete_until_all_contacts_processed() {
+        let mut scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
+        scout.add_contact(Entity::from_bits(1), Vec2::new(100.0, 100.0));
+        scout.add_contact(Entity::from_bits(2), Vec2::new(200.0, 200.0));
+
+        assert!(!scout.all_contacts_processed());
+
+        // Identify first, still not complete
+        scout.identify_contact(Entity::from_bits(1), ContactType::Asteroid);
+        assert!(!scout.all_contacts_processed());
+
+        // Identify second, now complete
+        scout.identify_contact(Entity::from_bits(2), ContactType::Station);
+        assert!(scout.all_contacts_processed());
+    }
+
+    #[test]
+    fn zone_complete_with_skipped_contacts() {
+        let mut scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
+        scout.add_contact(Entity::from_bits(1), Vec2::new(100.0, 100.0));
+        scout.add_contact(Entity::from_bits(2), Vec2::new(200.0, 200.0));
+
+        // Identify one, skip the other (e.g., it's a ship)
+        scout.identify_contact(Entity::from_bits(1), ContactType::Asteroid);
+        scout.skip_contact(Entity::from_bits(2));
+
+        assert!(scout.all_contacts_processed());
+    }
+
+    #[test]
+    fn scout_transitions_to_zone_complete() {
+        let mut scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
+        scout.phase = ScoutPhase::Investigating;
+
+        scout.complete_zone();
+
+        assert_eq!(scout.phase, ScoutPhase::ZoneComplete);
+    }
+
+    #[test]
+    fn scout_only_jumps_after_zone_complete() {
+        let mut scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
+        scout.discover_gate(Entity::from_bits(1), 200);
+
+        // Before zone complete, phase should not be TravelingToGate
+        assert_eq!(scout.phase, ScoutPhase::Scanning);
+
+        // After marking zone complete, scout can proceed
+        scout.complete_zone();
+        assert_eq!(scout.phase, ScoutPhase::ZoneComplete);
+    }
+
+    // --- Pirate alerting tests ---
+
+    #[test]
+    fn pirate_detection_increments_count() {
+        let mut scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
+
+        scout.add_pirate_contact(Entity::from_bits(1), Vec2::new(100.0, 100.0), false);
+        scout.add_pirate_contact(Entity::from_bits(2), Vec2::new(200.0, 200.0), false);
+        scout.add_pirate_contact(Entity::from_bits(3), Vec2::new(300.0, 300.0), true);
+
+        assert_eq!(scout.pirates_detected, 3);
+    }
+
+    #[test]
+    fn pirate_count_resets_on_new_scan() {
+        let mut scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
+
+        scout.add_pirate_contact(Entity::from_bits(1), Vec2::new(100.0, 100.0), false);
+        assert_eq!(scout.pirates_detected, 1);
+
+        // Start new scan (e.g., after entering new zone)
+        scout.start_scan();
+
+        assert_eq!(scout.pirates_detected, 0);
+        assert!(scout.contacts.is_empty());
+    }
+
+    #[test]
+    fn scout_start_scan_resets_state() {
+        let mut scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
+
+        // Add some state
+        scout.add_contact(Entity::from_bits(1), Vec2::new(100.0, 100.0));
+        scout.advance_scan(2.0);
+        scout.pirates_detected = 2;
+
+        // Start fresh scan
+        scout.start_scan();
+
+        assert_eq!(scout.phase, ScoutPhase::Scanning);
+        assert_eq!(scout.scan_remaining_seconds, SCAN_DURATION_SECONDS);
+        assert!(scout.contacts.is_empty());
+        assert_eq!(scout.current_contact_index, 0);
+        assert_eq!(scout.pirates_detected, 0);
     }
 }

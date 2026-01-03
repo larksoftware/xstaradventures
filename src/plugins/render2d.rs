@@ -14,15 +14,15 @@ use crate::plugins::sim::{advance_intel_layer, refresh_intel};
 use crate::plugins::ui::{HoveredNode, MapUi};
 use crate::ships::{Ship, ShipKind};
 use crate::stations::Station;
-use crate::world::{KnowledgeLayer, Sector, SystemIntel, SystemNode, ZoneModifier};
+use crate::world::{KnowledgeLayer, Sector, SystemIntel, SystemNode, ZoneId, ZoneModifier};
 use bevy::image::Image;
 use bevy::window::PrimaryWindow;
 
 // Type aliases for complex query filter combinations (filters only, not full queries)
-type StationSpawnFilter = (With<Station>, Without<StationVisual>);
-type OreSpawnFilter = (With<OreNode>, Without<OreVisual>);
-type PirateBaseSpawnFilter = (With<PirateBase>, Without<PirateBaseVisual>);
-type PirateShipSpawnFilter = (With<PirateShip>, Without<PirateShipVisual>);
+type StationSpawnFilter = (With<Station>, Without<StationVisualMarker>);
+type OreSpawnFilter = (With<OreNode>, Without<OreVisualMarker>);
+type PirateBaseSpawnFilter = (With<PirateBase>, Without<PirateBaseVisualMarker>);
+type PirateShipSpawnFilter = (With<PirateShip>, Without<PirateShipVisualMarker>);
 type ShipSpawnFilter = (
     Without<ShipVisual>,
     Without<ShipVisualMarker>,
@@ -110,6 +110,7 @@ impl Plugin for Render2DPlugin {
                     sync_ship_visuals,
                     update_ship_visuals,
                     update_ship_labels,
+                    sync_zone_visibility,
                     draw_focus_marker,
                     draw_tactical_navigation,
                     draw_home_beacon,
@@ -217,9 +218,15 @@ struct RouteLabel;
 struct NodeLabel;
 
 #[derive(Component)]
+struct NodeVisualMarker;
+
+#[derive(Component)]
 struct StationVisual {
     target: Entity,
 }
+
+#[derive(Component)]
+struct StationVisualMarker;
 
 #[derive(Component)]
 struct StationLabel;
@@ -240,14 +247,23 @@ struct OreVisual {
 }
 
 #[derive(Component)]
+struct OreVisualMarker;
+
+#[derive(Component)]
 struct PirateBaseVisual {
     target: Entity,
 }
 
 #[derive(Component)]
+struct PirateBaseVisualMarker;
+
+#[derive(Component)]
 struct PirateShipVisual {
     target: Entity,
 }
+
+#[derive(Component)]
+struct PirateShipVisualMarker;
 
 #[derive(Resource)]
 pub struct IntelRefreshCooldown {
@@ -497,7 +513,7 @@ fn spawn_node_visuals(
     mut commands: Commands,
     fog: Res<FogConfig>,
     toggles: Res<RenderToggles>,
-    nodes: Query<(Entity, &SystemNode, &SystemIntel), Without<NodeVisual>>,
+    nodes: Query<(Entity, &SystemNode, &SystemIntel), Without<NodeVisualMarker>>,
 ) {
     if !toggles.show_nodes {
         return;
@@ -527,6 +543,7 @@ fn spawn_node_visuals(
         };
 
         commands.spawn((NodeVisual { target: entity }, sprite));
+        commands.entity(entity).insert(NodeVisualMarker);
     }
 }
 
@@ -534,7 +551,7 @@ fn sync_node_visuals(
     mut commands: Commands,
     toggles: Res<RenderToggles>,
     mut visuals: Query<(Entity, &NodeVisual, &mut Transform)>,
-    nodes: Query<&SystemNode>,
+    nodes: Query<(&SystemNode, &SystemIntel)>,
 ) {
     if !toggles.show_nodes {
         return;
@@ -542,7 +559,13 @@ fn sync_node_visuals(
 
     for (visual_entity, visual, mut transform) in visuals.iter_mut() {
         match nodes.get(visual.target) {
-            Ok(node) => {
+            Ok((node, intel)) => {
+                // Despawn visual if node is no longer revealed
+                if !intel.revealed {
+                    commands.entity(visual.target).remove::<NodeVisualMarker>();
+                    commands.entity(visual_entity).despawn();
+                    continue;
+                }
                 transform.translation.x = node.position.x;
                 transform.translation.y = node.position.y;
             }
@@ -555,9 +578,22 @@ fn sync_node_visuals(
 
 fn spawn_station_visuals(
     mut commands: Commands,
-    stations: Query<(Entity, &Transform), StationSpawnFilter>,
+    player_query: Query<&ZoneId, With<PlayerControl>>,
+    stations: Query<(Entity, &Transform, Option<&ZoneId>), StationSpawnFilter>,
 ) {
-    for (entity, transform) in stations.iter() {
+    let player_zone = player_query.single().map(|z| z.0).ok();
+
+    for (entity, transform, zone) in stations.iter() {
+        // Mark the station as having a visual (to prevent duplicate spawning)
+        commands.entity(entity).insert(StationVisualMarker);
+
+        // Determine initial visibility based on zone
+        let visible = match (player_zone, zone) {
+            (Some(pz), Some(sz)) => sz.0 == pz,
+            (Some(_), None) => true,
+            (None, _) => true,
+        };
+
         let sprite = SpriteBundle {
             sprite: Sprite {
                 color: Color::srgb(0.85, 0.8, 0.35),
@@ -565,6 +601,11 @@ fn spawn_station_visuals(
                 ..default()
             },
             transform: *transform,
+            visibility: if visible {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
             ..default()
         };
 
@@ -602,8 +643,24 @@ fn sync_station_visuals(
     }
 }
 
-fn spawn_ore_visuals(mut commands: Commands, ores: Query<(Entity, &Transform), OreSpawnFilter>) {
-    for (entity, transform) in ores.iter() {
+fn spawn_ore_visuals(
+    mut commands: Commands,
+    player_query: Query<&ZoneId, With<PlayerControl>>,
+    ores: Query<(Entity, &Transform, Option<&ZoneId>), OreSpawnFilter>,
+) {
+    let player_zone = player_query.single().map(|z| z.0).ok();
+
+    for (entity, transform, zone) in ores.iter() {
+        // Mark the ore node as having a visual (to prevent duplicate spawning)
+        commands.entity(entity).insert(OreVisualMarker);
+
+        // Determine initial visibility based on zone
+        let visible = match (player_zone, zone) {
+            (Some(pz), Some(oz)) => oz.0 == pz,
+            (Some(_), None) => true,
+            (None, _) => true,
+        };
+
         let sprite = SpriteBundle {
             sprite: Sprite {
                 color: Color::srgb(0.75, 0.6, 0.35),
@@ -611,6 +668,11 @@ fn spawn_ore_visuals(mut commands: Commands, ores: Query<(Entity, &Transform), O
                 ..default()
             },
             transform: *transform,
+            visibility: if visible {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
             ..default()
         };
 
@@ -678,9 +740,20 @@ fn update_ore_visuals(
 
 fn spawn_pirate_base_visuals(
     mut commands: Commands,
-    bases: Query<(Entity, &Transform), PirateBaseSpawnFilter>,
+    player_query: Query<&ZoneId, With<PlayerControl>>,
+    bases: Query<(Entity, &Transform, Option<&ZoneId>), PirateBaseSpawnFilter>,
 ) {
-    for (entity, transform) in bases.iter() {
+    let player_zone = player_query.single().map(|z| z.0).ok();
+
+    for (entity, transform, zone) in bases.iter() {
+        commands.entity(entity).insert(PirateBaseVisualMarker);
+
+        let visible = match (player_zone, zone) {
+            (Some(pz), Some(bz)) => bz.0 == pz,
+            (Some(_), None) => true,
+            (None, _) => true,
+        };
+
         let sprite = SpriteBundle {
             sprite: Sprite {
                 color: Color::srgb(0.85, 0.25, 0.2),
@@ -688,6 +761,11 @@ fn spawn_pirate_base_visuals(
                 ..default()
             },
             transform: *transform,
+            visibility: if visible {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
             ..default()
         };
 
@@ -724,9 +802,20 @@ fn sync_pirate_base_visuals(
 
 fn spawn_pirate_ship_visuals(
     mut commands: Commands,
-    ships: Query<(Entity, &Transform), PirateShipSpawnFilter>,
+    player_query: Query<&ZoneId, With<PlayerControl>>,
+    ships: Query<(Entity, &Transform, Option<&ZoneId>), PirateShipSpawnFilter>,
 ) {
-    for (entity, transform) in ships.iter() {
+    let player_zone = player_query.single().map(|z| z.0).ok();
+
+    for (entity, transform, zone) in ships.iter() {
+        commands.entity(entity).insert(PirateShipVisualMarker);
+
+        let visible = match (player_zone, zone) {
+            (Some(pz), Some(sz)) => sz.0 == pz,
+            (Some(_), None) => true,
+            (None, _) => true,
+        };
+
         let sprite = SpriteBundle {
             sprite: Sprite {
                 color: Color::srgb(0.9, 0.35, 0.3),
@@ -734,6 +823,11 @@ fn spawn_pirate_ship_visuals(
                 ..default()
             },
             transform: *transform,
+            visibility: if visible {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
             ..default()
         };
 
@@ -896,7 +990,8 @@ fn update_ship_visuals(
 fn update_ship_labels(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    ships: Query<(&Ship, &Transform)>,
+    player_query: Query<&ZoneId, With<PlayerControl>>,
+    ships: Query<(&Ship, &Transform, Option<&ZoneId>)>,
     labels: Query<Entity, With<ShipLabel>>,
 ) {
     for entity in labels.iter() {
@@ -912,7 +1007,18 @@ fn update_ship_labels(
 
     let font = asset_server.load(font_path);
 
-    for (ship, transform) in ships.iter() {
+    // Get player zone for filtering
+    let player_zone = player_query.single().map(|z| z.0).ok();
+
+    for (ship, transform, zone) in ships.iter() {
+        // Skip ships not in player's zone
+        if let Some(pz) = player_zone {
+            let entity_zone = zone.map(|z| z.0);
+            if !is_visible_in_zone(entity_zone, pz) {
+                continue;
+            }
+        }
+
         let fuel_pct = if ship.fuel_capacity > 0.0 {
             (ship.fuel / ship.fuel_capacity) * 100.0
         } else {
@@ -936,6 +1042,140 @@ fn update_ship_labels(
         );
         bundle.transform = Transform::from_xyz(pos.x, pos.y, 1.0);
         commands.spawn((ShipLabel, bundle));
+    }
+}
+
+/// Synchronizes entity visibility based on zone matching with the player.
+/// Entities in different zones than the player are hidden.
+#[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
+fn sync_zone_visibility(
+    player_query: Query<&ZoneId, With<PlayerControl>>,
+    // Query zones for simulation entities
+    stations: Query<(Entity, Option<&ZoneId>), With<Station>>,
+    ores: Query<(Entity, Option<&ZoneId>), With<OreNode>>,
+    pirate_bases: Query<(Entity, Option<&ZoneId>), With<PirateBase>>,
+    pirate_ships: Query<(Entity, Option<&ZoneId>), With<PirateShip>>,
+    ships: Query<(Entity, Option<&ZoneId>), With<Ship>>,
+    // Query visuals to update visibility
+    mut station_visuals: Query<(&StationVisual, &mut Visibility)>,
+    mut ore_visuals: Query<(&OreVisual, &mut Visibility), Without<StationVisual>>,
+    mut pirate_base_visuals: Query<
+        (&PirateBaseVisual, &mut Visibility),
+        (Without<StationVisual>, Without<OreVisual>),
+    >,
+    mut pirate_ship_visuals: Query<
+        (&PirateShipVisual, &mut Visibility),
+        (
+            Without<StationVisual>,
+            Without<OreVisual>,
+            Without<PirateBaseVisual>,
+        ),
+    >,
+    mut ship_visuals: Query<
+        (&ShipVisual, &mut Visibility),
+        (
+            Without<StationVisual>,
+            Without<OreVisual>,
+            Without<PirateBaseVisual>,
+            Without<PirateShipVisual>,
+        ),
+    >,
+) {
+    // Get player's current zone
+    let player_zone = match player_query.single() {
+        Ok(zone) => zone.0,
+        Err(_) => return, // No player, skip
+    };
+
+    // Build lookup maps for entity zones
+    let station_zones: std::collections::HashMap<Entity, Option<u32>> =
+        stations.iter().map(|(e, z)| (e, z.map(|z| z.0))).collect();
+
+    let ore_zones: std::collections::HashMap<Entity, Option<u32>> =
+        ores.iter().map(|(e, z)| (e, z.map(|z| z.0))).collect();
+
+    let pirate_base_zones: std::collections::HashMap<Entity, Option<u32>> = pirate_bases
+        .iter()
+        .map(|(e, z)| (e, z.map(|z| z.0)))
+        .collect();
+
+    let pirate_ship_zones: std::collections::HashMap<Entity, Option<u32>> = pirate_ships
+        .iter()
+        .map(|(e, z)| (e, z.map(|z| z.0)))
+        .collect();
+
+    let ship_zones: std::collections::HashMap<Entity, Option<u32>> =
+        ships.iter().map(|(e, z)| (e, z.map(|z| z.0))).collect();
+
+    // Update station visuals
+    for (visual, mut visibility) in station_visuals.iter_mut() {
+        let visible = match station_zones.get(&visual.target) {
+            Some(&Some(zone)) => zone == player_zone,
+            Some(&None) => true, // Entity exists but has no zone - show it
+            None => false,       // Entity not found - hide visual
+        };
+        *visibility = if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+
+    // Update ore visuals
+    for (visual, mut visibility) in ore_visuals.iter_mut() {
+        let visible = match ore_zones.get(&visual.target) {
+            Some(&Some(zone)) => zone == player_zone,
+            Some(&None) => true,
+            None => false,
+        };
+        *visibility = if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+
+    // Update pirate base visuals
+    for (visual, mut visibility) in pirate_base_visuals.iter_mut() {
+        let visible = match pirate_base_zones.get(&visual.target) {
+            Some(&Some(zone)) => zone == player_zone,
+            Some(&None) => true,
+            None => false,
+        };
+        *visibility = if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+
+    // Update pirate ship visuals
+    for (visual, mut visibility) in pirate_ship_visuals.iter_mut() {
+        let visible = match pirate_ship_zones.get(&visual.target) {
+            Some(&Some(zone)) => zone == player_zone,
+            Some(&None) => true,
+            None => false,
+        };
+        *visibility = if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+
+    // Update ship visuals (non-player ships)
+    for (visual, mut visibility) in ship_visuals.iter_mut() {
+        let visible = match ship_zones.get(&visual.target) {
+            Some(&Some(zone)) => zone == player_zone,
+            Some(&None) => true,
+            None => false,
+        };
+        *visibility = if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
     }
 }
 
@@ -1304,10 +1544,12 @@ fn clear_focus_marker_on_map(mut marker: ResMut<FocusMarker>) {
 fn update_station_labels(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    player_query: Query<&ZoneId, With<PlayerControl>>,
     stations: Query<(
         &Station,
         Option<&crate::stations::StationCrisis>,
         &Transform,
+        Option<&ZoneId>,
     )>,
     labels: Query<Entity, With<StationLabel>>,
 ) {
@@ -1324,7 +1566,18 @@ fn update_station_labels(
 
     let font = asset_server.load(font_path);
 
-    for (station, crisis, transform) in stations.iter() {
+    // Get player zone for filtering
+    let player_zone = player_query.single().map(|z| z.0).ok();
+
+    for (station, crisis, transform, zone) in stations.iter() {
+        // Skip stations not in player's zone
+        if let Some(pz) = player_zone {
+            let entity_zone = zone.map(|z| z.0);
+            if !is_visible_in_zone(entity_zone, pz) {
+                continue;
+            }
+        }
+
         let crisis_icon = if crisis.is_some() { "!" } else { "" };
         let label = format!("{}{}", station_kind_short(station.kind), crisis_icon);
         let pos = Vec2::new(transform.translation.x, transform.translation.y + 10.0);
@@ -1346,7 +1599,7 @@ fn update_station_labels(
 fn sync_view_entities(
     view: Res<ViewMode>,
     mut commands: Commands,
-    node_visuals: Query<Entity, With<NodeVisual>>,
+    node_visuals: Query<(Entity, &NodeVisual)>,
     node_labels: Query<Entity, With<NodeLabel>>,
     route_labels: Query<Entity, With<RouteLabel>>,
     station_visuals: Query<Entity, With<StationVisual>>,
@@ -1359,7 +1612,8 @@ fn sync_view_entities(
 ) {
     match *view {
         ViewMode::World => {
-            for entity in node_visuals.iter() {
+            for (entity, visual) in node_visuals.iter() {
+                commands.entity(visual.target).remove::<NodeVisualMarker>();
                 commands.entity(entity).despawn();
             }
             for entity in node_labels.iter() {
@@ -1662,7 +1916,6 @@ fn update_node_labels(
     asset_server: Res<AssetServer>,
     toggles: Res<RenderToggles>,
     debug_window: Res<crate::plugins::core::DebugWindow>,
-    ticks: Res<crate::plugins::sim::SimTickCount>,
     nodes: Query<(&SystemNode, &SystemIntel)>,
     labels: Query<Entity, With<NodeLabel>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
@@ -1695,13 +1948,11 @@ fn update_node_labels(
         if !intel.revealed {
             continue;
         }
-        let age = ticks.tick.saturating_sub(intel.revealed_tick);
         let label = format!(
-            "L{} {:.0}% {} t{}",
+            "L{} {:.0}% {}",
             layer_short(intel.layer),
             intel.confidence * 100.0,
             modifier_icon(node.modifier),
-            age
         );
 
         let position = node.position + Vec2::new(0.0, 14.0);
@@ -1846,7 +2097,7 @@ fn modifier_icon(modifier: Option<ZoneModifier>) -> &'static str {
         Some(ZoneModifier::NebulaInterference) => "N",
         Some(ZoneModifier::RichOreVeins) => "O",
         Some(ZoneModifier::ClearSignals) => "C",
-        None => ".",
+        None => "",
     }
 }
 
@@ -1881,7 +2132,7 @@ fn ship_state_short(state: crate::ships::ShipState) -> &'static str {
 
 fn update_hovered_node(
     windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &GlobalTransform)>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
     nodes: Query<(&SystemNode, &SystemIntel)>,
     mut hovered: ResMut<HoveredNode>,
 ) {
@@ -1930,14 +2181,22 @@ fn update_hovered_node(
     let mut closest_confidence = 0.0;
     let mut closest_modifier = None;
     let mut closest_dist = 9999.0;
-    let radius = 14.0;
+    let enter_radius = 14.0;
+    // Larger radius to keep hovering - prevents edge flicker
+    let keep_radius = 20.0;
 
     for (node, intel) in nodes.iter() {
         if !intel.revealed {
             continue;
         }
         let dist = node.position.distance(world_pos);
-        if dist <= radius && dist < closest_dist {
+        // Use larger radius if we're already hovering this node (hysteresis)
+        let effective_radius = if hovered.id == Some(node.id) {
+            keep_radius
+        } else {
+            enter_radius
+        };
+        if dist <= effective_radius && dist < closest_dist {
             closest_dist = dist;
             closest_id = Some(node.id);
             closest_layer = Some(intel.layer);
@@ -1950,8 +2209,13 @@ fn update_hovered_node(
     hovered.layer = closest_layer;
     hovered.confidence = closest_confidence;
     hovered.modifier = closest_modifier;
-    hovered.screen_pos = Some(cursor);
-    hovered.screen_size = Vec2::new(window.width(), window.height());
+    // Only set screen_pos when actually hovering a node
+    if closest_id.is_some() {
+        hovered.screen_pos = Some(cursor);
+        hovered.screen_size = Vec2::new(window.width(), window.height());
+    } else {
+        hovered.screen_pos = None;
+    }
 }
 
 fn layer_floor(layer: KnowledgeLayer, fog: &FogConfig) -> f32 {
@@ -1985,9 +2249,19 @@ fn risk_color(risk: f32) -> Color {
     )
 }
 
+/// Determines if an entity should be visible based on zone matching.
+/// An entity is visible if it's in the same zone as the player.
+/// Entities without a zone are always visible (backwards compatibility).
+fn is_visible_in_zone(entity_zone: Option<u32>, player_zone: u32) -> bool {
+    match entity_zone {
+        Some(zone) => zone == player_zone,
+        None => true, // Entities without zones are always visible
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{map_center, map_zoom_presets, risk_color};
+    use super::{is_visible_in_zone, map_center, map_zoom_presets, risk_color};
     use crate::world::{Sector, SystemNode};
     use bevy::prelude::{Color, LinearRgba, Vec2};
 
@@ -2511,5 +2785,49 @@ mod tests {
     fn map_zoom_presets_second_is_point_eight() {
         let presets = map_zoom_presets();
         assert_close(presets[1], 0.8);
+    }
+
+    // Zone visibility tests
+
+    #[test]
+    fn entity_in_same_zone_is_visible() {
+        assert!(is_visible_in_zone(Some(100), 100));
+    }
+
+    #[test]
+    fn entity_in_different_zone_is_not_visible() {
+        assert!(!is_visible_in_zone(Some(200), 100));
+    }
+
+    #[test]
+    fn entity_without_zone_is_always_visible() {
+        assert!(is_visible_in_zone(None, 100));
+        assert!(is_visible_in_zone(None, 999));
+    }
+
+    #[test]
+    fn entity_visibility_changes_with_player_zone() {
+        // Entity in zone 100
+        let entity_zone = Some(100);
+
+        // Visible when player in zone 100
+        assert!(is_visible_in_zone(entity_zone, 100));
+
+        // Not visible when player moves to zone 200
+        assert!(!is_visible_in_zone(entity_zone, 200));
+    }
+
+    #[test]
+    fn multiple_entities_different_zones() {
+        let player_zone = 100;
+
+        // Entity in player's zone - visible
+        assert!(is_visible_in_zone(Some(100), player_zone));
+
+        // Entity in adjacent zone - not visible
+        assert!(!is_visible_in_zone(Some(101), player_zone));
+
+        // Entity in distant zone - not visible
+        assert!(!is_visible_in_zone(Some(999), player_zone));
     }
 }

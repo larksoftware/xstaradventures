@@ -709,7 +709,7 @@ fn scan_nearby_entities(
             let pos = Vec2::new(transform.translation.x, transform.translation.y);
             targets
                 .entities
-                .push((entity, pos, "○ Asteroid".to_string()));
+                .push((entity, pos, "[o] Asteroid".to_string()));
         }
     }
 
@@ -719,7 +719,7 @@ fn scan_nearby_entities(
             let pos = Vec2::new(transform.translation.x, transform.translation.y);
             targets
                 .entities
-                .push((entity, pos, "⚔ Marauder".to_string()));
+                .push((entity, pos, "[!] Marauder".to_string()));
         }
     }
 
@@ -729,7 +729,7 @@ fn scan_nearby_entities(
             let pos = Vec2::new(transform.translation.x, transform.translation.y);
             targets
                 .entities
-                .push((entity, pos, "⚔ Raider Den".to_string()));
+                .push((entity, pos, "[!] Raider Den".to_string()));
         }
     }
 
@@ -738,10 +738,10 @@ fn scan_nearby_entities(
         if zone.is_some_and(|z| z.0 == player_zone.0) {
             let pos = Vec2::new(transform.translation.x, transform.translation.y);
             let label = match ship.kind {
-                ShipKind::Scout => "✦ Pathfinder",
-                ShipKind::Miner => "✦ Harvester",
-                ShipKind::Security => "✦ Sentinel",
-                ShipKind::PlayerShip => "✦ Vessel",
+                ShipKind::Scout => "[*] Pathfinder",
+                ShipKind::Miner => "[*] Harvester",
+                ShipKind::Security => "[*] Sentinel",
+                ShipKind::PlayerShip => "[*] Vessel",
             };
             targets.entities.push((entity, pos, label.to_string()));
         }
@@ -751,7 +751,7 @@ fn scan_nearby_entities(
     for (entity, transform, gate, zone) in jump_gates.iter() {
         if zone.is_some_and(|z| z.0 == player_zone.0) {
             let pos = Vec2::new(transform.translation.x, transform.translation.y);
-            let label = format!("◈ Rift Gate → {}", gate.destination_zone);
+            let label = format!("[>] Rift Gate -> {}", gate.destination_zone);
             targets.entities.push((entity, pos, label));
         }
     }
@@ -806,9 +806,10 @@ fn handle_tactical_selection(
         return;
     }
 
-    // First Tab press confirms current target without cycling
+    // First Tab press selects closest target (index 0)
     if !targets.manually_selected {
         targets.manually_selected = true;
+        targets.selected_index = 0;
         return;
     }
 

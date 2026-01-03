@@ -567,6 +567,7 @@ fn handle_scout_risk_input(
 const SCOUT_SPEED: f32 = 80.0;
 const SCOUT_GATE_RANGE: f32 = 25.0;
 
+#[allow(clippy::too_many_arguments)]
 #[allow(clippy::type_complexity)]
 fn scout_behavior(
     time: Res<Time<Fixed>>,
@@ -580,8 +581,18 @@ fn scout_behavior(
         &mut ZoneId,
     )>,
     gates: Query<(Entity, &Transform, &JumpGate, &ZoneId), Without<ScoutBehavior>>,
+    ore_nodes: Query<(Entity, &Transform, &ZoneId), (With<OreNode>, Without<ScoutBehavior>)>,
+    stations: Query<(Entity, &Transform, &ZoneId), (With<Station>, Without<ScoutBehavior>)>,
+    pirates: Query<(Entity, &Transform, &ZoneId), (With<PirateShip>, Without<ScoutBehavior>)>,
+    pirate_bases: Query<(Entity, &Transform, &ZoneId), (With<PirateBase>, Without<ScoutBehavior>)>,
+    other_ships: Query<
+        (Entity, &Transform, &ZoneId),
+        (With<Ship>, Without<ScoutBehavior>, Without<PlayerControl>),
+    >,
     mut intel_query: Query<(&SystemNode, &mut SystemIntel)>,
 ) {
+    use crate::fleets::{ContactType, IDENTIFY_RANGE};
+
     let delta_seconds = time.delta_secs();
 
     for (_scout_entity, mut ship, mut transform, mut behavior, mut zone_id) in scouts.iter_mut() {
@@ -591,19 +602,172 @@ fn scout_behavior(
 
         match behavior.phase {
             ScoutPhase::Scanning => {
-                // Phase 1: Scan current zone
-                scout_scan_zone(
-                    &mut behavior,
-                    &mut ship,
-                    &zone_id,
-                    &gates,
-                    &mut intel_query,
-                    ticks.tick,
-                    &mut log,
-                );
+                ship.state = ShipState::Executing;
+
+                // Advance scan timer
+                let scan_completed = behavior.advance_scan(delta_seconds);
+
+                if scan_completed {
+                    info!("Scout: Scan complete in zone {}", zone_id.0);
+
+                    // Mark zone as visited
+                    behavior.mark_zone_visited(zone_id.0);
+
+                    // Reveal intel for current zone
+                    for (node, mut intel) in intel_query.iter_mut() {
+                        if node.id == zone_id.0 && !intel.revealed {
+                            intel.revealed = true;
+                            intel.confidence = 0.8;
+                            intel.last_seen_tick = ticks.tick;
+                            intel.revealed_tick = ticks.tick;
+                            if matches!(intel.layer, KnowledgeLayer::Existence) {
+                                intel.layer = KnowledgeLayer::Geography;
+                            }
+                        }
+                    }
+
+                    // Discover gates (identified immediately for navigation)
+                    for (gate_entity, gate_transform, gate, gate_zone) in gates.iter() {
+                        if gate_zone.0 == zone_id.0 {
+                            behavior.discover_gate(gate_entity, gate.destination_zone);
+                            // Add gate as identified contact
+                            let pos = Vec2::new(
+                                gate_transform.translation.x,
+                                gate_transform.translation.y,
+                            );
+                            behavior.contacts.push(crate::fleets::ScoutContact {
+                                entity: gate_entity,
+                                position: pos,
+                                contact_type: ContactType::JumpGate,
+                                status: crate::fleets::ContactStatus::Identified,
+                            });
+                        }
+                    }
+
+                    // Detect pirates (identified immediately - special case)
+                    for (pirate_entity, pirate_transform, pirate_zone) in pirates.iter() {
+                        if pirate_zone.0 == zone_id.0 {
+                            let pos = Vec2::new(
+                                pirate_transform.translation.x,
+                                pirate_transform.translation.y,
+                            );
+                            behavior.add_pirate_contact(pirate_entity, pos, false);
+                            info!("Scout: Detected pirate ship at ({:.0}, {:.0})", pos.x, pos.y);
+                        }
+                    }
+
+                    // Detect pirate bases (identified immediately)
+                    for (base_entity, base_transform, base_zone) in pirate_bases.iter() {
+                        if base_zone.0 == zone_id.0 {
+                            let pos = Vec2::new(
+                                base_transform.translation.x,
+                                base_transform.translation.y,
+                            );
+                            behavior.add_pirate_contact(base_entity, pos, true);
+                            info!("Scout: Detected pirate base at ({:.0}, {:.0})", pos.x, pos.y);
+                        }
+                    }
+
+                    // Add ore nodes as unidentified contacts
+                    for (ore_entity, ore_transform, ore_zone) in ore_nodes.iter() {
+                        if ore_zone.0 == zone_id.0 {
+                            let pos =
+                                Vec2::new(ore_transform.translation.x, ore_transform.translation.y);
+                            behavior.add_contact(ore_entity, pos);
+                        }
+                    }
+
+                    // Add stations as unidentified contacts
+                    for (station_entity, station_transform, station_zone) in stations.iter() {
+                        if station_zone.0 == zone_id.0 {
+                            let pos = Vec2::new(
+                                station_transform.translation.x,
+                                station_transform.translation.y,
+                            );
+                            behavior.add_contact(station_entity, pos);
+                        }
+                    }
+
+                    // Add other ships as unidentified (will be skipped during investigation)
+                    for (ship_entity, ship_transform, ship_zone) in other_ships.iter() {
+                        if ship_zone.0 == zone_id.0 {
+                            let pos = Vec2::new(
+                                ship_transform.translation.x,
+                                ship_transform.translation.y,
+                            );
+                            behavior.add_contact(ship_entity, pos);
+                            // Mark as ship type so it gets skipped
+                            if let Some(contact) = behavior.contacts.last_mut() {
+                                contact.contact_type = ContactType::Ship;
+                                contact.status = crate::fleets::ContactStatus::Skipped;
+                            }
+                        }
+                    }
+
+                    // Log scan complete with pirate warning if applicable
+                    if behavior.pirates_detected > 0 {
+                        log.push(format!(
+                            "Scout scan: Zone {} - {} pirates detected!",
+                            zone_id.0, behavior.pirates_detected
+                        ));
+                    } else {
+                        log.push(format!("Scout scan complete: Zone {}", zone_id.0));
+                    }
+
+                    // Transition to investigation phase
+                    let unidentified_count = behavior.contacts.iter()
+                        .filter(|c| matches!(c.status, crate::fleets::ContactStatus::Unidentified))
+                        .count();
+                    info!("Scout: Beginning investigation of {} contacts", unidentified_count);
+                    behavior.begin_investigation();
+                }
+            }
+            ScoutPhase::Investigating => {
+                // Navigate to next unidentified contact
+                if let Some(contact) = behavior.next_contact_to_investigate() {
+                    let contact_entity = contact.entity;
+                    let contact_pos = contact.position;
+
+                    // Set target position
+                    behavior.target_position = Some(contact_pos);
+                    ship.state = ShipState::InTransit;
+
+                    // Move toward contact
+                    let scout_pos = Vec2::new(transform.translation.x, transform.translation.y);
+                    let to_contact = contact_pos - scout_pos;
+                    let distance = to_contact.length();
+
+                    if distance <= IDENTIFY_RANGE {
+                        // Within range - identify the contact
+                        // Determine actual type based on entity queries
+                        let actual_type = if ore_nodes.get(contact_entity).is_ok() {
+                            ContactType::Asteroid
+                        } else if stations.get(contact_entity).is_ok() {
+                            ContactType::Station
+                        } else {
+                            ContactType::Unknown
+                        };
+
+                        behavior.identify_contact(contact_entity, actual_type);
+                        info!("Scout: Identified contact as {:?}", actual_type);
+                        behavior.target_position = None;
+                    } else {
+                        // Move toward contact
+                        let direction = to_contact.normalize_or_zero();
+                        let step = direction * SCOUT_SPEED * delta_seconds;
+                        transform.translation.x += step.x;
+                        transform.translation.y += step.y;
+                    }
+                } else {
+                    // No more contacts to investigate - zone complete
+                    info!("Scout: Zone {} investigation complete", zone_id.0);
+                    behavior.complete_zone();
+                }
+            }
+            ScoutPhase::ZoneComplete => {
+                scout_zone_complete(&mut behavior, &mut ship, &zone_id, &gates);
             }
             ScoutPhase::TravelingToGate => {
-                // Phase 2: Travel to gate
                 scout_travel_to_gate(
                     &mut behavior,
                     &mut ship,
@@ -613,7 +777,6 @@ fn scout_behavior(
                 );
             }
             ScoutPhase::Jumping => {
-                // Phase 3: Process jump transition
                 scout_process_jump(
                     &mut behavior,
                     &mut ship,
@@ -627,61 +790,6 @@ fn scout_behavior(
             }
         }
     }
-}
-
-fn scout_scan_zone(
-    behavior: &mut ScoutBehavior,
-    ship: &mut Ship,
-    zone_id: &ZoneId,
-    gates: &Query<(Entity, &Transform, &JumpGate, &ZoneId), Without<ScoutBehavior>>,
-    intel_query: &mut Query<(&SystemNode, &mut SystemIntel)>,
-    tick: u64,
-    log: &mut EventLog,
-) {
-    // Mark current zone as visited
-    behavior.mark_zone_visited(zone_id.0);
-
-    // Reveal intel for current zone
-    for (node, mut intel) in intel_query.iter_mut() {
-        if node.id == zone_id.0 && !intel.revealed {
-            intel.revealed = true;
-            intel.confidence = 0.8;
-            intel.last_seen_tick = tick;
-            intel.revealed_tick = tick;
-            if matches!(intel.layer, KnowledgeLayer::Existence) {
-                intel.layer = KnowledgeLayer::Geography;
-            }
-            log.push(format!("Scout reported zone {}", zone_id.0));
-        }
-    }
-
-    // Discover all gates in current zone
-    for (gate_entity, _gate_transform, gate, gate_zone) in gates.iter() {
-        if gate_zone.0 == zone_id.0 {
-            behavior.discover_gate(gate_entity, gate.destination_zone);
-        }
-    }
-
-    // Decide next action
-    if let Some((gate_entity, _dest_zone)) = behavior.next_gate_to_explore() {
-        // Find the gate's position
-        for (entity, gate_transform, _gate, _gate_zone) in gates.iter() {
-            if entity == gate_entity {
-                behavior.target_gate = Some(gate_entity);
-                behavior.target_position = Some(Vec2::new(
-                    gate_transform.translation.x,
-                    gate_transform.translation.y,
-                ));
-                behavior.phase = ScoutPhase::TravelingToGate;
-                ship.state = ShipState::InTransit;
-                return;
-            }
-        }
-    }
-
-    // No more gates to explore - exploration complete
-    behavior.phase = ScoutPhase::Complete;
-    ship.state = ShipState::Idle;
 }
 
 fn scout_travel_to_gate(
@@ -710,6 +818,7 @@ fn scout_travel_to_gate(
         if let Some(target_gate) = behavior.target_gate {
             for (entity, _gate_transform, gate, _gate_zone) in gates.iter() {
                 if entity == target_gate {
+                    info!("Scout: Jumping to zone {}", gate.destination_zone);
                     behavior.start_jump(gate.destination_zone, JUMP_TRANSITION_SECONDS);
                     behavior.remove_gate(target_gate);
                     ship.state = ShipState::Executing;
@@ -746,10 +855,43 @@ fn scout_process_jump(
         // Update the actual ZoneId component
         zone_id.0 = behavior.current_zone;
         ship.state = ShipState::Executing;
+        info!("Scout: Arrived at zone {}, beginning scan", destination);
         log.push(format!("Scout arrived at zone {}", destination));
+        // Start scanning the new zone
+        behavior.start_scan();
     } else {
         ship.state = ShipState::InTransit;
     }
+}
+
+fn scout_zone_complete(
+    behavior: &mut ScoutBehavior,
+    ship: &mut Ship,
+    zone_id: &ZoneId,
+    gates: &Query<(Entity, &Transform, &JumpGate, &ZoneId), Without<ScoutBehavior>>,
+) {
+    // Find next gate to explore
+    if let Some((gate_entity, _dest_zone)) = behavior.next_gate_to_explore() {
+        // Find the gate's position
+        for (entity, gate_transform, gate, gate_zone) in gates.iter() {
+            if entity == gate_entity && gate_zone.0 == zone_id.0 {
+                info!("Scout: Traveling to gate (destination zone {})", gate.destination_zone);
+                behavior.target_gate = Some(gate_entity);
+                behavior.target_position = Some(Vec2::new(
+                    gate_transform.translation.x,
+                    gate_transform.translation.y,
+                ));
+                behavior.phase = ScoutPhase::TravelingToGate;
+                ship.state = ShipState::InTransit;
+                return;
+            }
+        }
+    }
+
+    // No more gates to explore - exploration complete
+    info!("Scout: Exploration complete - all reachable zones visited");
+    behavior.phase = ScoutPhase::Complete;
+    ship.state = ShipState::Idle;
 }
 
 fn next_unit_ore_rng(state: &mut u64) -> f32 {
@@ -762,33 +904,22 @@ const ORE_MIN_RADIUS: f32 = 400.0;
 const ORE_MAX_RADIUS: f32 = 800.0;
 
 fn ore_count_for_zone(modifier: Option<ZoneModifier>, is_starter: bool, rng: &mut u64) -> usize {
-    if is_starter {
-        let rand_val = next_unit_ore_rng(rng);
-        return 3 + (rand_val * 3.0) as usize;
-    }
+    let rand_val = next_unit_ore_rng(rng);
 
-    match modifier {
-        Some(ZoneModifier::RichOreVeins) => {
-            let rand_val = next_unit_ore_rng(rng);
-            20 + (rand_val * 11.0) as usize
+    // Base range 0-20, with modifiers shifting the distribution
+    let (min, max) = if is_starter {
+        (5, 10) // Starter has guaranteed asteroids for learning
+    } else {
+        match modifier {
+            Some(ZoneModifier::RichOreVeins) => (12, 20), // Rich zones favor high end
+            Some(ZoneModifier::HighRadiation) => (0, 8),  // Radiation zones are sparse
+            Some(ZoneModifier::NebulaInterference) => (4, 14),
+            Some(ZoneModifier::ClearSignals) => (6, 16),
+            None => (0, 20), // Full range for unmodified zones
         }
-        Some(ZoneModifier::HighRadiation) => {
-            let rand_val = next_unit_ore_rng(rng);
-            (rand_val * 6.0) as usize
-        }
-        Some(ZoneModifier::NebulaInterference) => {
-            let rand_val = next_unit_ore_rng(rng);
-            8 + (rand_val * 8.0) as usize
-        }
-        Some(ZoneModifier::ClearSignals) => {
-            let rand_val = next_unit_ore_rng(rng);
-            10 + (rand_val * 6.0) as usize
-        }
-        None => {
-            let rand_val = next_unit_ore_rng(rng);
-            5 + (rand_val * 8.0) as usize
-        }
-    }
+    };
+
+    min + (rand_val * (max - min + 1) as f32) as usize
 }
 
 fn spawn_ore_at_revealed_nodes(
