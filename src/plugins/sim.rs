@@ -1,33 +1,48 @@
 use bevy::prelude::*;
 
-use crate::plugins::core::EventLog;
+use crate::compat::SpatialBundle;
+
+use crate::fleets::{next_risk, risk_threshold, scout_confidence, RiskTolerance, ScoutBehavior};
+use crate::ore::{OreKind, OreNode};
+use crate::pirates::{schedule_next_launch, PirateBase, PirateShip};
+use crate::plugins::core::{EventLog, InputBindings};
 use crate::plugins::core::{FogConfig, SimConfig};
 use crate::ships::{ship_fuel_burn_per_minute, Ship, ShipFuelAlert, ShipState};
 use crate::stations::{
-    station_fuel_burn_per_minute, CrisisStage, CrisisType, Station, StationBuild, StationCrisis,
-    StationState,
+    station_fuel_burn_per_minute, station_ore_production_per_minute, CrisisStage, CrisisType,
+    Station, StationBuild, StationCrisis, StationCrisisLog, StationProduction, StationState,
 };
-use crate::world::{zone_modifier_effect, KnowledgeLayer, Sector, SystemIntel};
+use crate::world::{zone_modifier_effect, KnowledgeLayer, Sector, SystemIntel, SystemNode};
 
 pub struct SimPlugin;
 
 impl Plugin for SimPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SimTickCount>().add_systems(
-            FixedUpdate,
-            (
-                tick_simulation,
-                decay_intel,
-                station_fuel_burn,
-                station_build_progress,
-                station_crisis_stub,
-                station_lifecycle_stub,
-                ship_fuel_burn,
-                ship_fuel_alerts,
-                ship_state_stub,
+        app.init_resource::<SimTickCount>()
+            .init_resource::<RevealedNodesTracker>()
+            .add_systems(
+                FixedUpdate,
+                (
+                    tick_simulation,
+                    decay_intel,
+                    station_fuel_burn,
+                    station_ore_production,
+                    station_build_progress,
+                    station_crisis_stub,
+                    station_lifecycle,
+                    log_station_crisis_changes,
+                    scout_behavior,
+                    spawn_ore_at_revealed_nodes,
+                    pirate_launches,
+                    pirate_move,
+                    pirate_harassment,
+                    ship_fuel_burn,
+                    ship_fuel_alerts,
+                    ship_state_stub,
+                )
+                    .run_if(sim_not_paused),
             )
-                .run_if(sim_not_paused),
-        );
+            .add_systems(Update, handle_scout_risk_input);
     }
 }
 
@@ -36,10 +51,15 @@ pub struct SimTickCount {
     pub tick: u64,
 }
 
+#[derive(Resource, Default)]
+struct RevealedNodesTracker {
+    spawned: std::collections::HashSet<u32>,
+}
+
 fn tick_simulation(mut counter: ResMut<SimTickCount>, sector: Res<Sector>) {
     counter.tick = counter.tick.saturating_add(1);
 
-    if counter.tick % 10 == 0 {
+    if counter.tick.is_multiple_of(10) {
         let total_distance = sector
             .routes
             .iter()
@@ -136,7 +156,7 @@ pub fn advance_intel_layer(intel: &mut SystemIntel) {
 }
 
 fn station_fuel_burn(time: Res<Time<Fixed>>, mut stations: Query<&mut Station>) {
-    let delta_seconds = time.delta_seconds();
+    let delta_seconds = time.delta_secs();
     let minutes = delta_seconds / 60.0;
 
     for mut station in stations.iter_mut() {
@@ -153,12 +173,35 @@ fn station_fuel_burn(time: Res<Time<Fixed>>, mut stations: Query<&mut Station>) 
     }
 }
 
+fn station_ore_production(
+    time: Res<Time<Fixed>>,
+    mut stations: Query<(&Station, &mut StationProduction)>,
+) {
+    let delta_seconds = time.delta_secs();
+    let minutes = delta_seconds / 60.0;
+
+    for (station, mut production) in stations.iter_mut() {
+        if !matches!(station.state, StationState::Operational) {
+            continue;
+        }
+
+        let rate = station_ore_production_per_minute(station.kind);
+        let produced = rate * minutes;
+        let free_capacity = (production.ore_capacity - production.ore).max(0.0);
+        let added = produced.min(free_capacity);
+
+        if added > 0.0 {
+            production.ore += added;
+        }
+    }
+}
+
 fn station_build_progress(
     time: Res<Time<Fixed>>,
     mut commands: Commands,
     mut stations: Query<(Entity, &mut Station, &mut StationBuild)>,
 ) {
-    let delta_seconds = time.delta_seconds();
+    let delta_seconds = time.delta_secs();
 
     for (entity, mut station, mut build) in stations.iter_mut() {
         if build.remaining_seconds > delta_seconds {
@@ -171,13 +214,33 @@ fn station_build_progress(
     }
 }
 
-fn station_lifecycle_stub(ticks: Res<SimTickCount>, stations: Query<&Station>) {
-    if ticks.tick % 60 != 0 {
-        return;
-    }
-
+fn station_lifecycle(
+    ticks: Res<SimTickCount>,
+    mut stations: Query<(&mut Station, Option<&StationBuild>, Option<&StationCrisis>)>,
+) {
     let mut counts = std::collections::BTreeMap::new();
-    for station in stations.iter() {
+
+    for (mut station, build, crisis) in stations.iter_mut() {
+        if matches!(station.state, StationState::Failed) {
+            let entry = counts.entry("Failed").or_insert(0u32);
+            *entry += 1;
+            continue;
+        }
+
+        if build.is_some() {
+            station.state = StationState::Deploying;
+        } else if station.fuel <= 0.0 {
+            station.state = StationState::Failed;
+        } else if let Some(crisis) = crisis {
+            station.state = match crisis.stage {
+                CrisisStage::Failing => StationState::Failing,
+                CrisisStage::Strained => StationState::Strained,
+                CrisisStage::Stable | CrisisStage::Resolved => StationState::Operational,
+            };
+        } else {
+            station.state = StationState::Operational;
+        }
+
         let key = match station.state {
             StationState::Deploying => "Deploying",
             StationState::Operational => "Operational",
@@ -189,7 +252,7 @@ fn station_lifecycle_stub(ticks: Res<SimTickCount>, stations: Query<&Station>) {
         *entry += 1;
     }
 
-    if !counts.is_empty() {
+    if ticks.tick.is_multiple_of(60) && !counts.is_empty() {
         let summary = counts
             .iter()
             .map(|(key, count)| format!("{}:{}", key, count))
@@ -232,14 +295,16 @@ fn station_crisis_stub(
                     });
                 }
             }
-        } else if crisis.is_some() {
-            commands.entity(entity).remove::<StationCrisis>();
+        } else if let Some(existing) = crisis {
+            if matches!(existing.crisis_type, CrisisType::FuelShortage) {
+                commands.entity(entity).remove::<StationCrisis>();
+            }
         }
     }
 }
 
 fn ship_fuel_burn(time: Res<Time<Fixed>>, mut ships: Query<&mut Ship>) {
-    let delta_seconds = time.delta_seconds();
+    let delta_seconds = time.delta_secs();
     let minutes = delta_seconds / 60.0;
 
     for mut ship in ships.iter_mut() {
@@ -302,12 +367,382 @@ fn ship_fuel_alerts(mut log: ResMut<EventLog>, mut alerts: Query<(&Ship, &mut Sh
     }
 }
 
+fn pirate_launches(
+    ticks: Res<SimTickCount>,
+    mut commands: Commands,
+    mut bases: Query<(&Transform, &mut PirateBase)>,
+) {
+    for (transform, mut base) in bases.iter_mut() {
+        if ticks.tick < base.next_launch_tick {
+            continue;
+        }
+
+        base.next_launch_tick = schedule_next_launch(ticks.tick, base.launch_interval_ticks);
+        commands.spawn((
+            PirateShip { speed: 70.0 },
+            Name::new("Pirate-Ship"),
+            SpatialBundle::from_transform(*transform),
+        ));
+    }
+}
+
+fn pirate_move(
+    time: Res<Time<Fixed>>,
+    stations: Query<&Transform, (With<Station>, Without<PirateShip>)>,
+    mut pirates: Query<(&mut Transform, &PirateShip)>,
+) {
+    if stations.is_empty() {
+        return;
+    }
+
+    let mut station_positions = Vec::new();
+    for transform in stations.iter() {
+        station_positions.push(Vec2::new(transform.translation.x, transform.translation.y));
+    }
+
+    let delta_seconds = time.delta_secs();
+
+    for (mut transform, pirate) in pirates.iter_mut() {
+        let pirate_pos = Vec2::new(transform.translation.x, transform.translation.y);
+        let mut target = station_positions[0];
+        let mut best_dist = pirate_pos.distance(target);
+
+        for pos in &station_positions[1..] {
+            let dist = pirate_pos.distance(*pos);
+            if dist < best_dist {
+                best_dist = dist;
+                target = *pos;
+            }
+        }
+
+        let direction = (target - pirate_pos).normalize_or_zero();
+        let step = direction * pirate.speed * delta_seconds;
+        transform.translation.x += step.x;
+        transform.translation.y += step.y;
+    }
+}
+
+fn pirate_harassment(
+    mut commands: Commands,
+    stations: Query<(Entity, &Transform), With<Station>>,
+    pirates: Query<&Transform, With<PirateShip>>,
+    crises: Query<Option<&StationCrisis>>,
+) {
+    let range = 18.0;
+
+    for (station_entity, station_transform) in stations.iter() {
+        let station_pos = Vec2::new(
+            station_transform.translation.x,
+            station_transform.translation.y,
+        );
+        let mut count = 0u32;
+
+        for pirate_transform in pirates.iter() {
+            let pirate_pos = Vec2::new(
+                pirate_transform.translation.x,
+                pirate_transform.translation.y,
+            );
+            if pirate_pos.distance(station_pos) <= range {
+                count += 1;
+            }
+        }
+
+        if count > 0 {
+            let stage = if count >= 2 {
+                CrisisStage::Failing
+            } else {
+                CrisisStage::Strained
+            };
+
+            commands.entity(station_entity).insert(StationCrisis {
+                crisis_type: CrisisType::PirateHarassment,
+                stage,
+            });
+        } else if let Ok(Some(existing)) = crises.get(station_entity) {
+            if matches!(existing.crisis_type, CrisisType::PirateHarassment) {
+                commands.entity(station_entity).remove::<StationCrisis>();
+            }
+        }
+    }
+}
+
+fn log_station_crisis_changes(
+    mut log: ResMut<EventLog>,
+    mut stations: Query<(&Station, Option<&StationCrisis>, &mut StationCrisisLog)>,
+) {
+    for (station, crisis, mut log_state) in stations.iter_mut() {
+        let current_type = crisis.map(|crisis| crisis.crisis_type);
+        let current_stage = crisis.map(|crisis| crisis.stage);
+
+        if crisis_changed(
+            log_state.last_type,
+            log_state.last_stage,
+            current_type,
+            current_stage,
+        ) {
+            match (current_type, current_stage) {
+                (Some(kind), Some(stage)) => {
+                    log.push(format!(
+                        "Station {:?} crisis: {:?} {:?}",
+                        station.kind, kind, stage
+                    ));
+                }
+                _ => {
+                    log.push(format!("Station {:?} crisis resolved", station.kind));
+                }
+            }
+            log_state.last_type = current_type;
+            log_state.last_stage = current_stage;
+        }
+    }
+}
+
+fn crisis_changed(
+    previous_type: Option<CrisisType>,
+    previous_stage: Option<CrisisStage>,
+    current_type: Option<CrisisType>,
+    current_stage: Option<CrisisStage>,
+) -> bool {
+    previous_type != current_type || previous_stage != current_stage
+}
+
+fn handle_scout_risk_input(
+    input: Res<ButtonInput<KeyCode>>,
+    bindings: Res<InputBindings>,
+    mut log: ResMut<EventLog>,
+    mut scouts: Query<&mut ScoutBehavior>,
+) {
+    let delta = if input.just_pressed(bindings.scout_risk_down) {
+        Some(-1)
+    } else if input.just_pressed(bindings.scout_risk_up) {
+        Some(1)
+    } else {
+        None
+    };
+
+    let delta = match delta {
+        Some(value) => value,
+        None => {
+            return;
+        }
+    };
+
+    let mut updated = None;
+    for mut scout in scouts.iter_mut() {
+        scout.risk = next_risk(scout.risk, delta);
+        updated = Some(scout.risk);
+    }
+
+    if let Some(risk) = updated {
+        let label = match risk {
+            RiskTolerance::Cautious => "Cautious",
+            RiskTolerance::Balanced => "Balanced",
+            RiskTolerance::Bold => "Bold",
+        };
+        log.push(format!("Scout risk set to {}", label));
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn scout_behavior(
+    time: Res<Time<Fixed>>,
+    ticks: Res<SimTickCount>,
+    sector: Res<Sector>,
+    mut log: ResMut<EventLog>,
+    mut scouts: Query<(&mut Ship, &mut Transform, &mut ScoutBehavior)>,
+    mut intel_query: ParamSet<(
+        Query<(&SystemNode, &SystemIntel)>,
+        Query<(&SystemNode, &mut SystemIntel)>,
+    )>,
+) {
+    let delta_seconds = time.delta_secs();
+    let arrival_radius = 8.0;
+    let speed = 80.0;
+
+    let mut revealed_map = std::collections::HashMap::new();
+    for (node, intel) in intel_query.p0().iter() {
+        revealed_map.insert(node.id, intel.revealed);
+    }
+
+    for (mut ship, mut transform, mut behavior) in scouts.iter_mut() {
+        if matches!(ship.state, ShipState::Disabled) {
+            continue;
+        }
+
+        if ticks.tick < behavior.next_decision_tick {
+            ship.state = ShipState::Idle;
+            continue;
+        }
+
+        if behavior.target_node.is_none() {
+            let threshold = risk_threshold(behavior.risk);
+            let target =
+                choose_scout_target(&sector, &revealed_map, behavior.current_node, threshold);
+            behavior.target_node = target;
+            behavior.next_decision_tick = ticks.tick.saturating_add(10);
+
+            if target.is_none() {
+                ship.state = ShipState::Idle;
+                continue;
+            }
+        }
+
+        let target_id = match behavior.target_node {
+            Some(id) => id,
+            None => {
+                ship.state = ShipState::Idle;
+                continue;
+            }
+        };
+
+        let target_pos = match find_node_position(&sector.nodes, target_id) {
+            Some(position) => position,
+            None => {
+                behavior.target_node = None;
+                ship.state = ShipState::Idle;
+                continue;
+            }
+        };
+
+        let current_pos = Vec2::new(transform.translation.x, transform.translation.y);
+        let to_target = target_pos - current_pos;
+        let distance = to_target.length();
+
+        if distance <= arrival_radius {
+            let route_risk =
+                route_risk_between(&sector, behavior.current_node, target_id).unwrap_or(1.0);
+            let confidence = scout_confidence(behavior.risk, route_risk);
+
+            for (node, mut intel) in intel_query.p1().iter_mut() {
+                if node.id == target_id {
+                    let was_revealed = intel.revealed;
+                    intel.revealed = true;
+                    intel.confidence = confidence;
+                    intel.last_seen_tick = ticks.tick;
+                    if !was_revealed {
+                        intel.revealed_tick = ticks.tick;
+                    }
+                    if matches!(intel.layer, KnowledgeLayer::Existence) {
+                        intel.layer = KnowledgeLayer::Geography;
+                    }
+                    break;
+                }
+            }
+
+            behavior.current_node = target_id;
+            behavior.target_node = None;
+            behavior.next_decision_tick = ticks.tick.saturating_add(20);
+            ship.state = ShipState::Executing;
+            log.push(format!("Scout reported node {}", target_id));
+        } else {
+            let direction = to_target.normalize_or_zero();
+            let step = direction * speed * delta_seconds;
+            transform.translation.x += step.x;
+            transform.translation.y += step.y;
+            ship.state = ShipState::InTransit;
+        }
+    }
+}
+
+fn spawn_ore_at_revealed_nodes(
+    mut commands: Commands,
+    mut tracker: ResMut<RevealedNodesTracker>,
+    nodes: Query<(&SystemNode, &SystemIntel)>,
+) {
+    let offsets_and_kinds = [
+        (Vec2::new(60.0, 40.0), OreKind::CommonOre),
+        (Vec2::new(-80.0, 30.0), OreKind::CommonOre),
+        (Vec2::new(20.0, -70.0), OreKind::FuelOre),
+    ];
+
+    for (node, intel) in nodes.iter() {
+        if intel.revealed && !tracker.spawned.contains(&node.id) {
+            tracker.spawned.insert(node.id);
+
+            for (index, (offset, kind)) in offsets_and_kinds.iter().enumerate() {
+                let capacity = 20.0 + (index as f32 * 6.0) + ((node.id as f32) * 0.01);
+                let kind_str = match kind {
+                    OreKind::CommonOre => "OreNode",
+                    OreKind::FuelOre => "FuelNode",
+                };
+                commands.spawn((
+                    OreNode {
+                        kind: *kind,
+                        remaining: capacity,
+                        capacity,
+                        rate_per_second: 3.0,
+                    },
+                    Name::new(format!("{}-{}-{}", kind_str, node.id, index + 1)),
+                    SpatialBundle::from_transform(Transform::from_xyz(
+                        node.position.x + offset.x,
+                        node.position.y + offset.y,
+                        0.3,
+                    )),
+                ));
+            }
+        }
+    }
+}
+
+fn route_risk_between(sector: &Sector, from: u32, to: u32) -> Option<f32> {
+    for route in &sector.routes {
+        if (route.from == from && route.to == to) || (route.from == to && route.to == from) {
+            return Some(route.risk);
+        }
+    }
+    None
+}
+
+fn choose_scout_target(
+    sector: &Sector,
+    revealed_map: &std::collections::HashMap<u32, bool>,
+    current_node: u32,
+    threshold: f32,
+) -> Option<u32> {
+    let mut candidates = sector
+        .nodes
+        .iter()
+        .filter_map(|node| {
+            let revealed = match revealed_map.get(&node.id) {
+                Some(revealed) => *revealed,
+                None => false,
+            };
+            if revealed {
+                None
+            } else {
+                Some(node.id)
+            }
+        })
+        .collect::<Vec<_>>();
+
+    candidates.sort_unstable();
+
+    for node_id in candidates {
+        let risk = route_risk_between(sector, current_node, node_id).unwrap_or(1.0);
+        if risk <= threshold {
+            return Some(node_id);
+        }
+    }
+
+    None
+}
+
+fn find_node_position(nodes: &[SystemNode], id: u32) -> Option<Vec2> {
+    for node in nodes {
+        if node.id == id {
+            return Some(node.position);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::system::SystemState;
     use crate::ships::ShipKind;
     use crate::stations::StationKind;
+    use crate::world::RouteEdge;
+    use bevy::ecs::system::SystemState;
     use std::time::Duration;
 
     #[test]
@@ -401,10 +836,8 @@ mod tests {
             ShipFuelAlert::default(),
         ));
 
-        let mut system_state: SystemState<(
-            ResMut<EventLog>,
-            Query<(&Ship, &mut ShipFuelAlert)>,
-        )> = SystemState::new(&mut world);
+        let mut system_state: SystemState<(ResMut<EventLog>, Query<(&Ship, &mut ShipFuelAlert)>)> =
+            SystemState::new(&mut world);
         {
             let (log, alerts) = system_state.get_mut(&mut world);
             ship_fuel_alerts(log, alerts);
@@ -414,10 +847,8 @@ mod tests {
         let log = world.resource::<EventLog>();
         assert_eq!(log.entries().len(), 2);
 
-        let mut system_state: SystemState<(
-            ResMut<EventLog>,
-            Query<(&Ship, &mut ShipFuelAlert)>,
-        )> = SystemState::new(&mut world);
+        let mut system_state: SystemState<(ResMut<EventLog>, Query<(&Ship, &mut ShipFuelAlert)>)> =
+            SystemState::new(&mut world);
         {
             let (log, alerts) = system_state.get_mut(&mut world);
             ship_fuel_alerts(log, alerts);
@@ -439,5 +870,258 @@ mod tests {
         let sector = Sector::default();
         let risk = zone_modifier_risk(&sector);
         assert_eq!(risk, 0.0);
+    }
+
+    #[test]
+    fn station_lifecycle_marks_failed_when_fuel_empty() {
+        let mut world = World::default();
+        world.insert_resource(SimTickCount { tick: 1 });
+        world.spawn(Station {
+            kind: StationKind::MiningOutpost,
+            state: StationState::Operational,
+            fuel: 0.0,
+            fuel_capacity: 30.0,
+        });
+
+        let mut system_state: SystemState<(
+            Res<SimTickCount>,
+            Query<(&mut Station, Option<&StationBuild>, Option<&StationCrisis>)>,
+        )> = SystemState::new(&mut world);
+        let (ticks, stations) = system_state.get_mut(&mut world);
+        station_lifecycle(ticks, stations);
+        system_state.apply(&mut world);
+
+        let mut query = world.query::<&Station>();
+        for station in query.iter(&world) {
+            assert_eq!(station.state, StationState::Failed);
+        }
+    }
+
+    #[test]
+    fn route_risk_between_matches_edge() {
+        let sector = Sector {
+            nodes: vec![],
+            routes: vec![RouteEdge {
+                from: 1,
+                to: 2,
+                distance: 10.0,
+                risk: 0.42,
+            }],
+        };
+
+        let risk = route_risk_between(&sector, 2, 1);
+        assert_eq!(risk, Some(0.42));
+    }
+
+    #[test]
+    fn choose_scout_target_skips_revealed_nodes() {
+        let sector = Sector {
+            nodes: vec![
+                SystemNode {
+                    id: 1,
+                    position: Vec2::ZERO,
+                    modifier: None,
+                },
+                SystemNode {
+                    id: 2,
+                    position: Vec2::new(10.0, 0.0),
+                    modifier: None,
+                },
+            ],
+            routes: vec![RouteEdge {
+                from: 1,
+                to: 2,
+                distance: 10.0,
+                risk: 0.2,
+            }],
+        };
+
+        let mut revealed = std::collections::HashMap::new();
+        revealed.insert(1, true);
+        revealed.insert(2, false);
+
+        let target = choose_scout_target(&sector, &revealed, 1, 0.5);
+        assert_eq!(target, Some(2));
+    }
+
+    #[test]
+    fn crisis_changed_detects_resolve() {
+        let changed = crisis_changed(
+            Some(CrisisType::FuelShortage),
+            Some(CrisisStage::Strained),
+            None,
+            None,
+        );
+        assert!(changed);
+    }
+
+    #[test]
+    fn station_ore_production_only_when_operational() {
+        let mut world = World::default();
+        let mut time = Time::<Fixed>::from_duration(Duration::from_secs_f32(60.0));
+        time.advance_by(Duration::from_secs_f32(60.0));
+        world.insert_resource(time);
+
+        world.spawn((
+            Station {
+                kind: StationKind::MiningOutpost,
+                state: StationState::Operational,
+                fuel: 20.0,
+                fuel_capacity: 30.0,
+            },
+            StationProduction {
+                ore: 0.0,
+                ore_capacity: 60.0,
+            },
+        ));
+
+        world.spawn((
+            Station {
+                kind: StationKind::MiningOutpost,
+                state: StationState::Deploying,
+                fuel: 20.0,
+                fuel_capacity: 30.0,
+            },
+            StationProduction {
+                ore: 0.0,
+                ore_capacity: 60.0,
+            },
+        ));
+
+        let mut system_state: SystemState<(
+            Res<Time<Fixed>>,
+            Query<(&Station, &mut StationProduction)>,
+        )> = SystemState::new(&mut world);
+        let (time, stations) = system_state.get_mut(&mut world);
+        station_ore_production(time, stations);
+        system_state.apply(&mut world);
+
+        let mut query = world.query::<(&Station, &StationProduction)>();
+        let mut count = 0;
+        for (station, production) in query.iter(&world) {
+            count += 1;
+            if matches!(station.state, StationState::Operational) {
+                assert!(
+                    production.ore > 0.0,
+                    "Operational station should produce ore"
+                );
+            } else {
+                assert_eq!(
+                    production.ore, 0.0,
+                    "Non-operational station should not produce ore"
+                );
+            }
+        }
+        assert_eq!(count, 2, "Should have spawned 2 stations");
+    }
+
+    #[test]
+    fn station_ore_production_respects_capacity() {
+        let mut world = World::default();
+        let mut time = Time::<Fixed>::from_duration(Duration::from_secs_f32(60.0));
+        time.advance_by(Duration::from_secs_f32(60.0));
+        world.insert_resource(time);
+
+        world.spawn((
+            Station {
+                kind: StationKind::MiningOutpost,
+                state: StationState::Operational,
+                fuel: 20.0,
+                fuel_capacity: 30.0,
+            },
+            StationProduction {
+                ore: 59.0,
+                ore_capacity: 60.0,
+            },
+        ));
+
+        let mut system_state: SystemState<(
+            Res<Time<Fixed>>,
+            Query<(&Station, &mut StationProduction)>,
+        )> = SystemState::new(&mut world);
+        let (time, stations) = system_state.get_mut(&mut world);
+        station_ore_production(time, stations);
+        system_state.apply(&mut world);
+
+        let mut query = world.query::<&StationProduction>();
+        for production in query.iter(&world) {
+            assert!(production.ore <= production.ore_capacity);
+        }
+    }
+
+    #[test]
+    fn station_crisis_recovers_when_refueled() {
+        let mut world = World::default();
+
+        let entity = world
+            .spawn((
+                Station {
+                    kind: StationKind::MiningOutpost,
+                    state: StationState::Strained,
+                    fuel: 5.0,
+                    fuel_capacity: 30.0,
+                },
+                StationCrisis {
+                    crisis_type: CrisisType::FuelShortage,
+                    stage: CrisisStage::Strained,
+                },
+            ))
+            .id();
+
+        let mut system_state: SystemState<(
+            Commands,
+            Query<(Entity, &Station, Option<&StationCrisis>)>,
+        )> = SystemState::new(&mut world);
+        let (commands, stations) = system_state.get_mut(&mut world);
+        station_crisis_stub(commands, stations);
+        system_state.apply(&mut world);
+
+        let has_crisis = world.get::<StationCrisis>(entity).is_some();
+        assert!(has_crisis, "Station should still have crisis with low fuel");
+
+        world.get_mut::<Station>(entity).unwrap().fuel = 20.0;
+
+        let mut system_state: SystemState<(
+            Commands,
+            Query<(Entity, &Station, Option<&StationCrisis>)>,
+        )> = SystemState::new(&mut world);
+        let (commands, stations) = system_state.get_mut(&mut world);
+        station_crisis_stub(commands, stations);
+        system_state.apply(&mut world);
+
+        let has_crisis = world.get::<StationCrisis>(entity).is_some();
+        assert!(!has_crisis, "Station should recover after refueling");
+    }
+
+    #[test]
+    fn log_station_crisis_changes_logs_new_crisis() {
+        let mut world = World::default();
+        world.insert_resource(EventLog::default());
+
+        world.spawn((
+            Station {
+                kind: StationKind::MiningOutpost,
+                state: StationState::Strained,
+                fuel: 5.0,
+                fuel_capacity: 30.0,
+            },
+            StationCrisis {
+                crisis_type: CrisisType::FuelShortage,
+                stage: CrisisStage::Strained,
+            },
+            StationCrisisLog::default(),
+        ));
+
+        let mut system_state: SystemState<(
+            ResMut<EventLog>,
+            Query<(&Station, Option<&StationCrisis>, &mut StationCrisisLog)>,
+        )> = SystemState::new(&mut world);
+        let (log, stations) = system_state.get_mut(&mut world);
+        log_station_crisis_changes(log, stations);
+        system_state.apply(&mut world);
+
+        let log = world.resource::<EventLog>();
+        assert_eq!(log.entries().len(), 1);
+        assert!(log.entries()[0].contains("crisis"));
     }
 }

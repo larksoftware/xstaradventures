@@ -1,3 +1,4 @@
+use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::prelude::*;
 
 use crate::plugins::core::SimConfig;
@@ -7,8 +8,8 @@ pub struct OrdersPlugin;
 
 impl Plugin for OrdersPlugin {
     fn build(&self, app: &mut App) {
-        app.add_event::<CommandEvent>()
-            .add_event::<OrderAppliedEvent>()
+        app.add_message::<CommandEvent>()
+            .add_message::<OrderAppliedEvent>()
             .init_resource::<OrderQueue>()
             .add_systems(Update, queue_commands)
             .add_systems(
@@ -18,7 +19,7 @@ impl Plugin for OrdersPlugin {
     }
 }
 
-#[derive(Event)]
+#[derive(Message)]
 pub struct CommandEvent {
     pub kind: CommandKind,
 }
@@ -28,7 +29,7 @@ pub enum CommandKind {
     Noop,
 }
 
-#[derive(Event)]
+#[derive(Message)]
 pub struct OrderAppliedEvent {
     pub kind: OrderKind,
 }
@@ -49,7 +50,7 @@ impl OrderQueue {
     }
 }
 
-fn queue_commands(mut commands: EventReader<CommandEvent>, mut queue: ResMut<OrderQueue>) {
+fn queue_commands(mut commands: MessageReader<CommandEvent>, mut queue: ResMut<OrderQueue>) {
     for command in commands.read() {
         let order = match command.kind {
             CommandKind::Noop => OrderKind::Noop,
@@ -58,15 +59,15 @@ fn queue_commands(mut commands: EventReader<CommandEvent>, mut queue: ResMut<Ord
     }
 }
 
-fn apply_orders(mut queue: ResMut<OrderQueue>, mut applied: EventWriter<OrderAppliedEvent>) {
+fn apply_orders(mut queue: ResMut<OrderQueue>, mut applied: MessageWriter<OrderAppliedEvent>) {
     for order in queue.pending.drain(..) {
-        applied.send(OrderAppliedEvent { kind: order });
+        applied.write(OrderAppliedEvent { kind: order });
     }
 }
 
-fn emit_sample_command(ticks: Res<SimTickCount>, mut commands: EventWriter<CommandEvent>) {
+fn emit_sample_command(ticks: Res<SimTickCount>, mut commands: MessageWriter<CommandEvent>) {
     if ticks.tick % 30 == 0 {
-        commands.send(CommandEvent {
+        commands.write(CommandEvent {
             kind: CommandKind::Noop,
         });
     }
@@ -76,7 +77,7 @@ fn sim_not_paused(config: Res<SimConfig>) -> bool {
     !config.paused
 }
 
-fn log_applied_orders(mut applied: EventReader<OrderAppliedEvent>) {
+fn log_applied_orders(mut applied: MessageReader<OrderAppliedEvent>) {
     for event in applied.read() {
         info!("Order applied: {:?}", event.kind);
     }

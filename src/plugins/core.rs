@@ -1,4 +1,6 @@
 use bevy::prelude::*;
+
+use crate::compat::SpriteBundle;
 use std::time::Duration;
 
 pub struct CorePlugin;
@@ -90,8 +92,38 @@ impl Default for ViewMode {
     }
 }
 
+#[derive(Resource, Debug, Default)]
+pub struct DebugWindow {
+    pub open: bool,
+}
+
+#[derive(Resource, Debug, Default)]
+pub struct RunTimer {
+    pub elapsed_seconds: f32,
+}
+
+impl RunTimer {
+    #[allow(dead_code)]
+    pub fn minutes(&self) -> u32 {
+        (self.elapsed_seconds / 60.0) as u32
+    }
+
+    #[allow(dead_code)]
+    pub fn seconds(&self) -> u32 {
+        (self.elapsed_seconds % 60.0) as u32
+    }
+}
+
 #[derive(Resource, Debug, Clone)]
 pub struct InputBindings {
+    pub move_up: KeyCode,
+    pub move_down: KeyCode,
+    pub rotate_left: KeyCode,
+    pub rotate_right: KeyCode,
+    pub interact: KeyCode,
+    pub toggle_debug: KeyCode,
+    pub scout_risk_down: KeyCode,
+    pub scout_risk_up: KeyCode,
     pub pause: KeyCode,
     pub rate_up: KeyCode,
     pub rate_down: KeyCode,
@@ -122,11 +154,19 @@ pub struct InputBindings {
 impl Default for InputBindings {
     fn default() -> Self {
         Self {
+            move_up: KeyCode::KeyW,
+            move_down: KeyCode::KeyS,
+            rotate_left: KeyCode::KeyA,
+            rotate_right: KeyCode::KeyD,
+            interact: KeyCode::KeyF,
+            toggle_debug: KeyCode::F3,
+            scout_risk_down: KeyCode::Comma,
+            scout_risk_up: KeyCode::Period,
             pause: KeyCode::Space,
             rate_up: KeyCode::BracketRight,
             rate_down: KeyCode::BracketLeft,
-            save: KeyCode::KeyS,
-            load: KeyCode::KeyL,
+            save: KeyCode::F5,
+            load: KeyCode::F9,
             seed_up: KeyCode::Equal,
             seed_down: KeyCode::Minus,
             toggle_nodes: KeyCode::KeyN,
@@ -143,7 +183,7 @@ impl Default for InputBindings {
             reveal_adjacent: KeyCode::KeyV,
             spawn_station: KeyCode::KeyB,
             spawn_ship: KeyCode::KeyJ,
-            reveal_all: KeyCode::KeyA,
+            reveal_all: KeyCode::KeyU,
             clear_reveal: KeyCode::KeyZ,
             map_zoom: KeyCode::KeyC,
             center_camera: KeyCode::KeyH,
@@ -173,6 +213,8 @@ impl Plugin for CorePlugin {
             .insert_resource(fog_config)
             .init_resource::<ViewMode>()
             .init_resource::<EventLog>()
+            .init_resource::<RunTimer>()
+            .init_resource::<DebugWindow>()
             .add_systems(OnEnter(GameState::Boot), log_enter_boot)
             .add_systems(OnEnter(GameState::Boot), transition_to_loading)
             .add_systems(OnEnter(GameState::Loading), setup_loading_screen)
@@ -185,6 +227,8 @@ impl Plugin for CorePlugin {
                     handle_pause_toggle,
                     handle_tick_rate_input,
                     handle_view_toggle,
+                    handle_debug_toggle,
+                    update_run_timer.run_if(in_state(GameState::InGame)),
                 ),
             )
             .add_systems(Update, tick_loading.run_if(in_state(GameState::Loading)));
@@ -225,7 +269,7 @@ fn setup_loading_screen(mut commands: Commands) {
         LoadingScreen,
         SpriteBundle {
             sprite: Sprite {
-                color: Color::rgb(0.02, 0.02, 0.04),
+                color: Color::srgb(0.02, 0.02, 0.04),
                 custom_size: Some(size),
                 ..default()
             },
@@ -245,7 +289,7 @@ fn tick_loading(
 ) {
     timer.timer.tick(time.delta());
 
-    if timer.timer.finished() {
+    if timer.timer.is_finished() {
         next_state.set(GameState::InGame);
     }
 }
@@ -305,6 +349,21 @@ fn handle_view_toggle(
         };
         log.push(format!("View: {:?}", view));
     }
+}
+
+fn handle_debug_toggle(
+    input: Res<ButtonInput<KeyCode>>,
+    bindings: Res<InputBindings>,
+    mut debug_window: ResMut<DebugWindow>,
+) {
+    if input.just_pressed(bindings.toggle_debug) {
+        debug_window.open = !debug_window.open;
+        info!("Debug window: {}", if debug_window.open { "open" } else { "closed" });
+    }
+}
+
+fn update_run_timer(time: Res<Time>, mut timer: ResMut<RunTimer>) {
+    timer.elapsed_seconds += time.delta_secs();
 }
 
 fn fixed_time_from_config(config: &SimConfig) -> Time<Fixed> {
@@ -440,4 +499,21 @@ mod tests {
         let fixed_time = world.resource::<Time<Fixed>>();
         assert_eq!(fixed_time.timestep().as_secs_f32(), 1.0);
     }
+}
+
+#[test]
+fn run_timer_tracks_elapsed_time() {
+    let timer = RunTimer {
+        elapsed_seconds: 125.0,
+    };
+    assert_eq!(timer.minutes(), 2);
+    assert_eq!(timer.seconds(), 5);
+}
+
+#[test]
+fn run_timer_default_is_zero() {
+    let timer = RunTimer::default();
+    assert_eq!(timer.elapsed_seconds, 0.0);
+    assert_eq!(timer.minutes(), 0);
+    assert_eq!(timer.seconds(), 0);
 }

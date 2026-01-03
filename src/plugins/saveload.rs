@@ -1,9 +1,12 @@
 use bevy::prelude::*;
 
+use crate::compat::SpatialBundle;
+
 use crate::plugins::core::{EventLog, GameState, InputBindings};
 use crate::ships::{ship_default_role, Fleet, FleetRole, Ship, ShipFuelAlert, ShipKind, ShipState};
 use crate::stations::{
-    CrisisStage, CrisisType, Station, StationBuild, StationCrisis, StationKind, StationState,
+    CrisisStage, CrisisType, Station, StationBuild, StationCrisis, StationCrisisLog, StationKind,
+    StationState,
 };
 use crate::world::{KnowledgeLayer, RouteEdge, Sector, SystemIntel, SystemNode, ZoneModifier};
 use std::collections::HashMap;
@@ -281,6 +284,7 @@ const SAMPLE_RON: &str = r#"
 
 const SAVE_PATH: &str = "saves/sector.ron";
 
+#[allow(clippy::too_many_arguments)]
 fn handle_load_request(
     input: Res<ButtonInput<KeyCode>>,
     bindings: Res<InputBindings>,
@@ -448,6 +452,7 @@ fn apply_loaded_sector(
                 fuel: station.fuel,
                 fuel_capacity: station.fuel_capacity,
             },
+            StationCrisisLog::default(),
             Name::new(format!("Station-{:?}-{:?}", station.kind, station.state)),
             SpatialBundle::from_transform(Transform::from_xyz(station.x, station.y, 0.5)),
         ));

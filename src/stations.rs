@@ -49,11 +49,23 @@ pub struct StationCrisis {
     pub stage: CrisisStage,
 }
 
+#[derive(Component, Debug, Default)]
+pub struct StationCrisisLog {
+    pub last_type: Option<CrisisType>,
+    pub last_stage: Option<CrisisStage>,
+}
+
+#[derive(Component, Debug)]
+pub struct StationProduction {
+    pub ore: f32,
+    pub ore_capacity: f32,
+}
+
 pub fn station_build_time_seconds(kind: StationKind) -> f32 {
     match kind {
-        StationKind::MiningOutpost => 240.0,
-        StationKind::FuelDepot => 180.0,
-        StationKind::SensorStation => 120.0,
+        StationKind::MiningOutpost => 180.0,
+        StationKind::FuelDepot => 135.0,
+        StationKind::SensorStation => 90.0,
     }
 }
 
@@ -67,9 +79,25 @@ pub fn station_fuel_capacity(kind: StationKind) -> f32 {
 
 pub fn station_fuel_burn_per_minute(kind: StationKind) -> f32 {
     match kind {
-        StationKind::MiningOutpost => 1.0,
-        StationKind::FuelDepot => 0.5,
-        StationKind::SensorStation => 0.75,
+        StationKind::MiningOutpost => 0.6,
+        StationKind::FuelDepot => 0.3,
+        StationKind::SensorStation => 0.45,
+    }
+}
+
+pub fn station_ore_capacity(kind: StationKind) -> f32 {
+    match kind {
+        StationKind::MiningOutpost => 80.0,
+        StationKind::FuelDepot => 0.0,
+        StationKind::SensorStation => 0.0,
+    }
+}
+
+pub fn station_ore_production_per_minute(kind: StationKind) -> f32 {
+    match kind {
+        StationKind::MiningOutpost => 3.5,
+        StationKind::FuelDepot => 0.0,
+        StationKind::SensorStation => 0.0,
     }
 }
 
@@ -81,13 +109,10 @@ mod tests {
     fn station_build_time_values() {
         assert_eq!(
             station_build_time_seconds(StationKind::MiningOutpost),
-            240.0
+            180.0
         );
-        assert_eq!(station_build_time_seconds(StationKind::FuelDepot), 180.0);
-        assert_eq!(
-            station_build_time_seconds(StationKind::SensorStation),
-            120.0
-        );
+        assert_eq!(station_build_time_seconds(StationKind::FuelDepot), 135.0);
+        assert_eq!(station_build_time_seconds(StationKind::SensorStation), 90.0);
     }
 
     #[test]
@@ -107,15 +132,15 @@ mod tests {
     fn station_fuel_burn_values() {
         assert_eq!(
             super::station_fuel_burn_per_minute(StationKind::MiningOutpost),
-            1.0
+            0.6
         );
         assert_eq!(
             super::station_fuel_burn_per_minute(StationKind::FuelDepot),
-            0.5
+            0.3
         );
         assert_eq!(
             super::station_fuel_burn_per_minute(StationKind::SensorStation),
-            0.75
+            0.45
         );
     }
 
@@ -326,7 +351,8 @@ mod tests {
         let sensor = super::station_fuel_burn_per_minute(StationKind::SensorStation);
         let depot = super::station_fuel_burn_per_minute(StationKind::FuelDepot);
 
-        assert_eq!(sensor - depot, 0.25);
+        let delta = sensor - depot;
+        assert!((delta - 0.15).abs() < 1e-6);
     }
 
     #[test]
@@ -334,7 +360,8 @@ mod tests {
         let sensor = super::station_fuel_burn_per_minute(StationKind::SensorStation);
         let depot = super::station_fuel_burn_per_minute(StationKind::FuelDepot);
 
-        assert_eq!(depot * 1.5, sensor);
+        let result = depot * 1.5;
+        assert!((result - sensor).abs() < 1e-6);
     }
 
     #[test]
@@ -359,5 +386,67 @@ mod tests {
 
         assert!(sensor < mine);
         assert!(sensor > depot);
+    }
+
+    #[test]
+    fn station_ore_capacity_mine_is_positive() {
+        let capacity = super::station_ore_capacity(StationKind::MiningOutpost);
+        assert!(capacity > 0.0);
+    }
+
+    #[test]
+    fn station_ore_capacity_depot_is_zero() {
+        let capacity = super::station_ore_capacity(StationKind::FuelDepot);
+        assert_eq!(capacity, 0.0);
+    }
+
+    #[test]
+    fn station_ore_capacity_sensor_is_zero() {
+        let capacity = super::station_ore_capacity(StationKind::SensorStation);
+        assert_eq!(capacity, 0.0);
+    }
+
+    #[test]
+    fn station_ore_production_mine_is_positive() {
+        let rate = super::station_ore_production_per_minute(StationKind::MiningOutpost);
+        assert!(rate > 0.0);
+    }
+
+    #[test]
+    fn station_ore_production_depot_is_zero() {
+        let rate = super::station_ore_production_per_minute(StationKind::FuelDepot);
+        assert_eq!(rate, 0.0);
+    }
+
+    #[test]
+    fn station_ore_production_sensor_is_zero() {
+        let rate = super::station_ore_production_per_minute(StationKind::SensorStation);
+        assert_eq!(rate, 0.0);
+    }
+
+    #[test]
+    fn station_ore_capacity_values() {
+        assert_eq!(
+            super::station_ore_capacity(StationKind::MiningOutpost),
+            80.0
+        );
+        assert_eq!(super::station_ore_capacity(StationKind::FuelDepot), 0.0);
+        assert_eq!(super::station_ore_capacity(StationKind::SensorStation), 0.0);
+    }
+
+    #[test]
+    fn station_ore_production_values() {
+        assert_eq!(
+            super::station_ore_production_per_minute(StationKind::MiningOutpost),
+            3.5
+        );
+        assert_eq!(
+            super::station_ore_production_per_minute(StationKind::FuelDepot),
+            0.0
+        );
+        assert_eq!(
+            super::station_ore_production_per_minute(StationKind::SensorStation),
+            0.0
+        );
     }
 }

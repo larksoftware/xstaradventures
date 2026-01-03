@@ -1,12 +1,20 @@
+use bevy::asset::LoadState;
+use bevy::camera::{OrthographicProjection, Projection};
+use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::prelude::*;
+use bevy::ui::Node as UiNode;
 use std::path::Path;
 
-use crate::plugins::core::{FogConfig, GameState, InputBindings, ViewMode};
+use crate::compat::{Camera2dBundle, SpriteBundle, Text2dBundle, TextBundle, TextStyle};
+use crate::ore::{OreKind, OreNode};
+use crate::pirates::{PirateBase, PirateShip};
+use crate::plugins::core::{DebugWindow, FogConfig, GameState, InputBindings, ViewMode};
 use crate::plugins::sim::{advance_intel_layer, refresh_intel};
 use crate::plugins::ui::{HoveredNode, MapUi};
 use crate::ships::{Ship, ShipKind};
 use crate::stations::Station;
 use crate::world::{KnowledgeLayer, Sector, SystemIntel, SystemNode, ZoneModifier};
+use bevy::image::Image;
 use bevy::window::PrimaryWindow;
 
 pub struct Render2DPlugin;
@@ -17,13 +25,12 @@ impl Plugin for Render2DPlugin {
             .init_resource::<IntelRefreshCooldown>()
             .init_resource::<MapZoomOverride>()
             .init_resource::<FocusMarker>()
+            .add_systems(Startup, load_player_ship_texture)
             .add_systems(Startup, setup_camera)
             .add_systems(Update, sync_camera_view.run_if(in_state(GameState::InGame)))
             .add_systems(
                 Update,
                 (
-                    handle_render_toggles,
-                    handle_map_zoom,
                     clear_focus_marker_on_map,
                     spawn_node_visuals,
                     sync_node_visuals,
@@ -32,8 +39,6 @@ impl Plugin for Render2DPlugin {
                     draw_routes,
                     update_route_labels,
                     update_node_labels,
-                    handle_intel_refresh,
-                    handle_intel_advance,
                     update_hovered_node,
                     sync_view_entities,
                 )
@@ -43,20 +48,53 @@ impl Plugin for Render2DPlugin {
             .add_systems(
                 Update,
                 (
+                    handle_render_toggles,
+                    handle_map_zoom,
+                    handle_intel_refresh,
+                    handle_intel_advance,
+                )
+                    .run_if(in_state(GameState::InGame))
+                    .run_if(view_is_map)
+                    .run_if(debug_window_open),
+            )
+            .add_systems(
+                Update,
+                (
                     draw_world_backdrop,
                     spawn_station_visuals,
                     sync_station_visuals,
                     update_station_labels,
+                    spawn_ore_visuals,
+                    sync_ore_visuals,
+                    update_ore_visuals,
+                    spawn_pirate_base_visuals,
+                    sync_pirate_base_visuals,
+                    spawn_pirate_ship_visuals,
+                    sync_pirate_ship_visuals,
                     spawn_ship_visuals,
                     sync_ship_visuals,
                     update_ship_visuals,
                     update_ship_labels,
                     draw_focus_marker,
-                    center_camera_on_revealed,
                     sync_view_entities,
                 )
                     .run_if(in_state(GameState::InGame))
                     .run_if(view_is_world),
+            )
+            .add_systems(
+                Update,
+                track_player_camera
+                    .after(sync_ship_visuals)
+                    .run_if(in_state(GameState::InGame))
+                    .run_if(view_is_world),
+            )
+            .add_systems(
+                Update,
+                (center_camera_on_revealed, debug_player_components)
+                    .after(sync_ship_visuals)
+                    .run_if(in_state(GameState::InGame))
+                    .run_if(view_is_world)
+                    .run_if(debug_window_open),
             );
     }
 }
@@ -159,7 +197,24 @@ struct ShipVisual {
 }
 
 #[derive(Component)]
+struct ShipVisualMarker;
+#[derive(Component)]
 struct ShipLabel;
+
+#[derive(Component)]
+struct OreVisual {
+    target: Entity,
+}
+
+#[derive(Component)]
+struct PirateBaseVisual {
+    target: Entity,
+}
+
+#[derive(Component)]
+struct PirateShipVisual {
+    target: Entity,
+}
 
 #[derive(Resource)]
 pub struct IntelRefreshCooldown {
@@ -198,35 +253,70 @@ impl FocusMarker {
     }
 }
 
+const PLAYER_SHIP_ASPECT: f32 = 860.0 / 1065.0;
+const PLAYER_SHIP_WIDTH: f32 = 60.0;
+const PLAYER_SHIP_SIZE: Vec2 = Vec2::new(PLAYER_SHIP_WIDTH, PLAYER_SHIP_WIDTH * PLAYER_SHIP_ASPECT);
+
+#[derive(Resource)]
+pub struct PlayerShipTexture(pub Handle<Image>);
+
 fn setup_camera(mut commands: Commands) {
-    commands.spawn(Camera2dBundle {
-        projection: OrthographicProjection {
-            scale: 0.75,
+    info!("Setting up camera with scale 0.75 at origin");
+
+    commands.spawn((
+        Camera2dBundle {
+            projection: Projection::Orthographic(OrthographicProjection {
+                scale: 0.75,
+                ..OrthographicProjection::default_2d()
+            }),
+            camera: Camera {
+                order: 0,
+                ..default()
+            },
             ..default()
         },
-        ..default()
-    });
+        Name::new("MainCamera"),
+    ));
+
+    info!("Camera spawned with render layers");
+}
+
+fn load_player_ship_texture(asset_server: Res<AssetServer>, mut commands: Commands) {
+    let handle = asset_server.load("sprites/player_ship.png");
+    commands.insert_resource(PlayerShipTexture(handle));
 }
 
 fn sync_camera_view(
     view: Res<ViewMode>,
     zoom: Res<MapZoomOverride>,
-    mut projections: Query<&mut OrthographicProjection, With<Camera2d>>,
+    mut projections: Query<&mut Projection, With<Camera2d>>,
     mut transforms: Query<&mut Transform, With<Camera2d>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     sector: Res<Sector>,
 ) {
     let scale = match *view {
         ViewMode::World => 0.6,
-        ViewMode::Map => map_scale_for_window(windows.get_single().ok(), &zoom),
+        ViewMode::Map => map_scale_for_window(windows.single().ok(), &zoom),
     };
 
     for mut projection in projections.iter_mut() {
-        projection.scale = scale;
+        if let Projection::Orthographic(orthographic) = &mut *projection {
+            if orthographic.scale != scale {
+                info!(
+                    "sync_camera_view: Setting camera scale to {:.2} for {:?}",
+                    scale, *view
+                );
+                orthographic.scale = scale;
+            }
+        }
     }
 
     if matches!(*view, ViewMode::Map) {
         let center = map_center(&sector);
+        info!(
+            "sync_camera_view: In Map mode, centering camera at ({:.1}, {:.1})",
+            center.x, center.y
+        );
         for mut transform in transforms.iter_mut() {
             transform.translation.x = center.x;
             transform.translation.y = center.y;
@@ -240,6 +330,10 @@ fn view_is_map(view: Res<ViewMode>) -> bool {
 
 fn view_is_world(view: Res<ViewMode>) -> bool {
     matches!(*view, ViewMode::World)
+}
+
+fn debug_window_open(debug_window: Res<DebugWindow>) -> bool {
+    debug_window.open
 }
 
 fn handle_map_zoom(
@@ -289,7 +383,7 @@ fn spawn_node_visuals(
 
         let sprite = SpriteBundle {
             sprite: Sprite {
-                color: Color::rgba(0.2, 0.75, 0.9, alpha * intensity),
+                color: Color::srgba(0.2, 0.75, 0.9, alpha * intensity),
                 custom_size: Some(Vec2::splat(12.0)),
                 ..default()
             },
@@ -331,7 +425,7 @@ fn spawn_station_visuals(
     for (entity, transform) in stations.iter() {
         let sprite = SpriteBundle {
             sprite: Sprite {
-                color: Color::rgb(0.85, 0.8, 0.35),
+                color: Color::srgb(0.85, 0.8, 0.35),
                 custom_size: Some(Vec2::new(10.0, 10.0)),
                 ..default()
             },
@@ -372,14 +466,135 @@ fn sync_station_visuals(
     }
 }
 
-fn spawn_ship_visuals(
+fn spawn_ore_visuals(
     mut commands: Commands,
-    ships: Query<(Entity, &Transform), (With<Ship>, Without<ShipVisual>)>,
+    ores: Query<(Entity, &Transform), (With<OreNode>, Without<OreVisual>)>,
+) {
+    for (entity, transform) in ores.iter() {
+        let sprite = SpriteBundle {
+            sprite: Sprite {
+                color: Color::srgb(0.75, 0.6, 0.35),
+                custom_size: Some(Vec2::new(6.0, 6.0)),
+                ..default()
+            },
+            transform: *transform,
+            ..default()
+        };
+
+        commands.spawn((OreVisual { target: entity }, sprite));
+    }
+}
+
+fn sync_ore_visuals(
+    mut commands: Commands,
+    mut params: ParamSet<(
+        Query<(Entity, &OreVisual, &mut Transform)>,
+        Query<(Entity, &Transform), With<OreNode>>,
+    )>,
+) {
+    let ore_transforms = {
+        let ores = params.p1();
+        let mut map = std::collections::HashMap::new();
+        for (entity, transform) in ores.iter() {
+            map.insert(entity, *transform);
+        }
+        map
+    };
+
+    let mut visuals = params.p0();
+    for (visual_entity, visual, mut transform) in visuals.iter_mut() {
+        if let Some(ore_transform) = ore_transforms.get(&visual.target) {
+            *transform = *ore_transform;
+        } else {
+            commands.entity(visual_entity).despawn();
+        }
+    }
+}
+
+fn update_ore_visuals(
+    ores: Query<(Entity, &OreNode)>,
+    mut visuals: Query<(&OreVisual, &mut Sprite)>,
+) {
+    for (visual, mut sprite) in visuals.iter_mut() {
+        if let Ok((_entity, ore)) = ores.get(visual.target) {
+            let ratio = ore.remaining_ratio();
+            sprite.color = match ore.kind {
+                OreKind::CommonOre => {
+                    if ratio <= 0.2 {
+                        Color::srgb(0.5, 0.4, 0.25)
+                    } else if ratio <= 0.6 {
+                        Color::srgb(0.7, 0.55, 0.3)
+                    } else {
+                        Color::srgb(0.75, 0.6, 0.35)
+                    }
+                }
+                OreKind::FuelOre => {
+                    if ratio <= 0.2 {
+                        Color::srgb(0.25, 0.5, 0.6)
+                    } else if ratio <= 0.6 {
+                        Color::srgb(0.35, 0.65, 0.75)
+                    } else {
+                        Color::srgb(0.4, 0.7, 0.85)
+                    }
+                }
+            };
+        }
+    }
+}
+
+fn spawn_pirate_base_visuals(
+    mut commands: Commands,
+    bases: Query<(Entity, &Transform), (With<PirateBase>, Without<PirateBaseVisual>)>,
+) {
+    for (entity, transform) in bases.iter() {
+        let sprite = SpriteBundle {
+            sprite: Sprite {
+                color: Color::srgb(0.85, 0.25, 0.2),
+                custom_size: Some(Vec2::new(12.0, 12.0)),
+                ..default()
+            },
+            transform: *transform,
+            ..default()
+        };
+
+        commands.spawn((PirateBaseVisual { target: entity }, sprite));
+    }
+}
+
+fn sync_pirate_base_visuals(
+    mut commands: Commands,
+    mut params: ParamSet<(
+        Query<(Entity, &PirateBaseVisual, &mut Transform)>,
+        Query<(Entity, &Transform), With<PirateBase>>,
+    )>,
+) {
+    let base_transforms = {
+        let bases = params.p1();
+        let mut map = std::collections::HashMap::new();
+        for (entity, transform) in bases.iter() {
+            map.insert(entity, *transform);
+        }
+        map
+    };
+
+    let mut visuals = params.p0();
+    for (visual_entity, visual, mut transform) in visuals.iter_mut() {
+        if let Some(base_transform) = base_transforms.get(&visual.target) {
+            *transform = *base_transform;
+        } else {
+            commands.entity(visual_entity).despawn();
+        }
+    }
+}
+
+fn spawn_pirate_ship_visuals(
+    mut commands: Commands,
+    ships: Query<(Entity, &Transform), (With<PirateShip>, Without<PirateShipVisual>)>,
 ) {
     for (entity, transform) in ships.iter() {
         let sprite = SpriteBundle {
             sprite: Sprite {
-                color: Color::rgb(0.35, 0.85, 0.55),
+                color: Color::srgb(0.9, 0.35, 0.3),
                 custom_size: Some(Vec2::new(8.0, 8.0)),
                 ..default()
             },
@@ -387,7 +602,107 @@ fn spawn_ship_visuals(
             ..default()
         };
 
+        commands.spawn((PirateShipVisual { target: entity }, sprite));
+    }
+}
+
+fn sync_pirate_ship_visuals(
+    mut commands: Commands,
+    mut params: ParamSet<(
+        Query<(Entity, &PirateShipVisual, &mut Transform)>,
+        Query<(Entity, &Transform), With<PirateShip>>,
+    )>,
+) {
+    let ship_transforms = {
+        let ships = params.p1();
+        let mut map = std::collections::HashMap::new();
+        for (entity, transform) in ships.iter() {
+            map.insert(entity, *transform);
+        }
+        map
+    };
+
+    let mut visuals = params.p0();
+    for (visual_entity, visual, mut transform) in visuals.iter_mut() {
+        if let Some(ship_transform) = ship_transforms.get(&visual.target) {
+            *transform = *ship_transform;
+        } else {
+            commands.entity(visual_entity).despawn();
+        }
+    }
+}
+
+fn spawn_ship_visuals(
+    mut commands: Commands,
+    ships: Query<
+        (Entity, &Transform, &Ship),
+        (
+            Without<ShipVisual>,
+            Without<ShipVisualMarker>,
+            Without<Sprite>,
+        ),
+    >,
+    player_texture: Res<PlayerShipTexture>,
+    asset_server: Res<AssetServer>,
+) {
+    for (entity, transform, ship) in ships.iter() {
+        let mut sprite_transform = *transform;
+        sprite_transform.translation.z = 1.0;
+
+        let is_player = matches!(ship.kind, ShipKind::PlayerShip);
+        let size = if is_player {
+            PLAYER_SHIP_SIZE
+        } else {
+            Vec2::new(10.0, 10.0)
+        };
+        let color = if is_player {
+            Color::WHITE
+        } else {
+            Color::srgb(0.35, 0.85, 0.55)
+        };
+        let texture_ready = matches!(
+            asset_server.get_load_state(&player_texture.0),
+            Some(LoadState::Loaded)
+        );
+        if is_player && !texture_ready {
+            continue;
+        }
+
+        let sprite = if is_player {
+            SpriteBundle {
+                sprite: Sprite {
+                    image: player_texture.0.clone(),
+                    color,
+                    custom_size: Some(size),
+                    ..default()
+                },
+                transform: sprite_transform,
+                ..default()
+            }
+        } else {
+            SpriteBundle {
+                sprite: Sprite {
+                    color,
+                    custom_size: Some(size),
+                    ..default()
+                },
+                transform: sprite_transform,
+                ..default()
+            }
+        };
+
         commands.spawn((ShipVisual { target: entity }, sprite));
+        commands.entity(entity).insert(ShipVisualMarker);
+
+        info!(
+            "Spawned ship visual: kind={:?}, pos=({:.1}, {:.1}, {:.1}), color={:?}, size={:?}",
+            ship.kind,
+            sprite_transform.translation.x,
+            sprite_transform.translation.y,
+            sprite_transform.translation.z,
+            color,
+            size
+        );
     }
 }
 
@@ -410,8 +725,11 @@ fn sync_ship_visuals(
     let mut visuals = params.p0();
     for (visual_entity, visual, mut transform) in visuals.iter_mut() {
         if let Some(ship_transform) = ship_transforms.get(&visual.target) {
+            let z = transform.translation.z;
             *transform = *ship_transform;
+            transform.translation.z = z;
         } else {
+            commands.entity(visual.target).remove::<ShipVisualMarker>();
             commands.entity(visual_entity).despawn();
         }
     }
@@ -429,12 +747,17 @@ fn update_ship_visuals(
                 0.0
             };
 
+            if matches!(ship.kind, ShipKind::PlayerShip) {
+                sprite.color = Color::WHITE;
+                continue;
+            }
+
             sprite.color = if ratio <= 0.10 {
-                Color::rgb(0.9, 0.25, 0.2)
+                Color::srgb(0.9, 0.25, 0.2)
             } else if ratio <= 0.25 {
-                Color::rgb(0.95, 0.7, 0.2)
+                Color::srgb(0.95, 0.7, 0.2)
             } else {
-                Color::rgb(0.35, 0.85, 0.55)
+                Color::srgb(0.35, 0.85, 0.55)
             };
         }
     }
@@ -473,21 +796,76 @@ fn update_ship_labels(
         );
         let pos = Vec2::new(transform.translation.x, transform.translation.y + 10.0);
 
-        commands.spawn((
-            ShipLabel,
-            Text2dBundle {
-                text: Text::from_section(
-                    label,
-                    TextStyle {
-                        font: font.clone(),
-                        font_size: 11.0,
-                        color: Color::rgb(0.35, 0.85, 0.55),
-                    },
-                ),
-                transform: Transform::from_xyz(pos.x, pos.y, 1.0),
-                ..default()
+        let mut bundle = Text2dBundle::from_section(
+            label,
+            TextStyle {
+                font: font.clone(),
+                font_size: 11.0,
+                color: Color::srgb(0.35, 0.85, 0.55),
             },
-        ));
+        );
+        bundle.transform = Transform::from_xyz(pos.x, pos.y, 1.0);
+        commands.spawn((ShipLabel, bundle));
+    }
+}
+
+fn debug_player_components(
+    player: Query<
+        (
+            &Transform,
+            Option<&Sprite>,
+            Option<&Visibility>,
+            Option<&ViewVisibility>,
+            Option<&InheritedVisibility>,
+        ),
+        With<crate::plugins::player::PlayerControl>,
+    >,
+) {
+    static mut LOGGED: bool = false;
+    unsafe {
+        if !LOGGED {
+            if let Ok((transform, sprite, vis, view_vis, inherited_vis)) = player.single() {
+                info!("=== PLAYER SHIP COMPONENTS ===");
+                info!(
+                    "  Transform: pos=({:.1}, {:.1}, {:.1})",
+                    transform.translation.x, transform.translation.y, transform.translation.z
+                );
+                info!("  Sprite: {}", if sprite.is_some() { "YES" } else { "NO" });
+                info!("  Visibility: {:?}", vis);
+                info!("  ViewVisibility: {:?}", view_vis);
+                info!("  InheritedVisibility: {:?}", inherited_vis);
+                LOGGED = true;
+            }
+        }
+    }
+}
+
+fn track_player_camera(
+    player: Query<
+        &Transform,
+        (
+            With<crate::plugins::player::PlayerControl>,
+            Without<Camera2d>,
+        ),
+    >,
+    mut cameras: Query<&mut Transform, With<Camera2d>>,
+) {
+    if let Ok(player_transform) = player.single() {
+        for mut camera_transform in cameras.iter_mut() {
+            let old_x = camera_transform.translation.x;
+            let old_y = camera_transform.translation.y;
+            camera_transform.translation.x = player_transform.translation.x;
+            camera_transform.translation.y = player_transform.translation.y;
+
+            if old_x != camera_transform.translation.x || old_y != camera_transform.translation.y {
+                info!(
+                    "Camera tracking player: ({:.1}, {:.1}) -> ({:.1}, {:.1})",
+                    old_x, old_y, camera_transform.translation.x, camera_transform.translation.y
+                );
+            }
+        }
+    } else {
+        info!("track_player_camera: No player found!");
     }
 }
 
@@ -534,7 +912,7 @@ fn draw_focus_marker(mut gizmos: Gizmos, marker: Res<FocusMarker>) {
         }
     };
 
-    let color = Color::rgba(0.85, 0.9, 1.0, 0.6);
+    let color = Color::srgba(0.85, 0.9, 1.0, 0.6);
     let size = 10.0;
 
     gizmos.line_2d(
@@ -547,7 +925,7 @@ fn draw_focus_marker(mut gizmos: Gizmos, marker: Res<FocusMarker>) {
         position + Vec2::new(0.0, size),
         color,
     );
-    gizmos.circle_2d(position, size * 0.6, Color::rgba(0.7, 0.85, 0.95, 0.35));
+    gizmos.circle_2d(position, size * 0.6, Color::srgba(0.7, 0.85, 0.95, 0.35));
 }
 
 fn clear_focus_marker_on_map(mut marker: ResMut<FocusMarker>) {
@@ -583,24 +961,20 @@ fn update_station_labels(
         let label = format!("{}{}", station_kind_short(station.kind), crisis_icon);
         let pos = Vec2::new(transform.translation.x, transform.translation.y + 10.0);
 
-        commands.spawn((
-            StationLabel,
-            Text2dBundle {
-                text: Text::from_section(
-                    label,
-                    TextStyle {
-                        font: font.clone(),
-                        font_size: 12.0,
-                        color: Color::rgb(0.85, 0.8, 0.35),
-                    },
-                ),
-                transform: Transform::from_xyz(pos.x, pos.y, 1.0),
-                ..default()
+        let mut bundle = Text2dBundle::from_section(
+            label,
+            TextStyle {
+                font: font.clone(),
+                font_size: 12.0,
+                color: Color::srgb(0.85, 0.8, 0.35),
             },
-        ));
+        );
+        bundle.transform = Transform::from_xyz(pos.x, pos.y, 1.0);
+        commands.spawn((StationLabel, bundle));
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn sync_view_entities(
     view: Res<ViewMode>,
     mut commands: Commands,
@@ -609,7 +983,10 @@ fn sync_view_entities(
     route_labels: Query<Entity, With<RouteLabel>>,
     station_visuals: Query<Entity, With<StationVisual>>,
     station_labels: Query<Entity, With<StationLabel>>,
-    ship_visuals: Query<Entity, With<ShipVisual>>,
+    ore_visuals: Query<Entity, With<OreVisual>>,
+    pirate_base_visuals: Query<Entity, With<PirateBaseVisual>>,
+    pirate_ship_visuals: Query<Entity, With<PirateShipVisual>>,
+    ship_visuals: Query<(Entity, &ShipVisual)>,
     ship_labels: Query<Entity, With<ShipLabel>>,
 ) {
     match *view {
@@ -631,7 +1008,17 @@ fn sync_view_entities(
             for entity in station_labels.iter() {
                 commands.entity(entity).despawn();
             }
-            for entity in ship_visuals.iter() {
+            for entity in ore_visuals.iter() {
+                commands.entity(entity).despawn();
+            }
+            for entity in pirate_base_visuals.iter() {
+                commands.entity(entity).despawn();
+            }
+            for entity in pirate_ship_visuals.iter() {
+                commands.entity(entity).despawn();
+            }
+            for (entity, visual) in ship_visuals.iter() {
+                commands.entity(visual.target).remove::<ShipVisualMarker>();
                 commands.entity(entity).despawn();
             }
             for entity in ship_labels.iter() {
@@ -647,7 +1034,7 @@ fn draw_world_backdrop(mut gizmos: Gizmos, toggles: Res<RenderToggles>) {
     }
 
     let edge = 800.0;
-    let color = Color::rgba(0.1, 0.15, 0.2, 0.25);
+    let color = Color::srgba(0.1, 0.15, 0.2, 0.25);
 
     gizmos.line_2d(Vec2::new(-edge, 0.0), Vec2::new(edge, 0.0), color);
     gizmos.line_2d(Vec2::new(0.0, -edge), Vec2::new(0.0, edge), color);
@@ -667,7 +1054,7 @@ fn draw_world_backdrop(mut gizmos: Gizmos, toggles: Res<RenderToggles>) {
     ];
 
     for star in stars {
-        gizmos.circle_2d(star, 2.0, Color::rgba(0.8, 0.85, 0.95, 0.4));
+        gizmos.circle_2d(star, 2.0, Color::srgba(0.8, 0.85, 0.95, 0.4));
     }
 }
 
@@ -737,7 +1124,7 @@ fn update_node_visuals(
                 KnowledgeLayer::Threats => 0.75,
                 KnowledgeLayer::Stability => 0.85,
             };
-            sprite.color = Color::rgba(0.2, 0.75, 0.9, alpha * intensity);
+            sprite.color = Color::srgba(0.2, 0.75, 0.9, alpha * intensity);
         }
     }
 }
@@ -756,7 +1143,7 @@ fn draw_intel_rings(
             continue;
         }
         let t = intel.confidence.clamp(0.0, 1.0);
-        let color = Color::rgba(0.9 * (1.0 - t), 0.8 * t, 0.3, 0.6);
+        let color = Color::srgba(0.9 * (1.0 - t), 0.8 * t, 0.3, 0.6);
         let radius = 10.0 + (1.0 - t) * 6.0;
         gizmos.circle_2d(node.position, radius, color);
     }
@@ -811,8 +1198,8 @@ fn update_route_labels(
         return;
     }
 
-    let (camera, camera_transform) = match cameras.get_single() {
-        Ok(camera) => camera,
+    let (camera, camera_transform) = match cameras.single() {
+        Ok(value) => value,
         Err(_) => {
             return;
         }
@@ -845,8 +1232,7 @@ fn update_route_labels(
         if let (Some(start), Some(end)) = (start, end) {
             let mid = (start + end) * 0.5;
             let label = format!("{:.0} r{:.2}", route.distance, route.risk);
-            let screen = camera.world_to_viewport(camera_transform, mid.extend(0.0));
-            if let Some(screen) = screen {
+            if let Ok(screen) = camera.world_to_viewport(camera_transform, mid.extend(0.0)) {
                 let position = Vec2::new(screen.x + 6.0, screen.y - 10.0);
                 let label_color = risk_color(route.risk);
                 commands.spawn((
@@ -860,14 +1246,14 @@ fn update_route_labels(
                             color: label_color,
                         },
                     )
-                    .with_style(Style {
+                    .with_node(UiNode {
                         position_type: PositionType::Absolute,
                         left: Val::Px(position.x),
                         top: Val::Px(position.y),
                         padding: UiRect::all(Val::Px(2.0)),
                         ..default()
                     })
-                    .with_background_color(Color::rgba(0.05, 0.08, 0.12, 0.6)),
+                    .with_background_color(Color::srgba(0.05, 0.08, 0.12, 0.6)),
                 ));
             }
         }
@@ -891,8 +1277,8 @@ fn update_node_labels(
         return;
     }
 
-    let (camera, camera_transform) = match cameras.get_single() {
-        Ok(camera) => camera,
+    let (camera, camera_transform) = match cameras.single() {
+        Ok(value) => value,
         Err(_) => {
             return;
         }
@@ -921,8 +1307,7 @@ fn update_node_labels(
         );
 
         let position = node.position + Vec2::new(0.0, 14.0);
-        let screen = camera.world_to_viewport(camera_transform, position.extend(0.0));
-        if let Some(screen) = screen {
+        if let Ok(screen) = camera.world_to_viewport(camera_transform, position.extend(0.0)) {
             let label_pos = Vec2::new(screen.x + 6.0, screen.y - 12.0);
             let alpha = 0.4 + 0.6 * intel.confidence.clamp(0.0, 1.0);
             commands.spawn((
@@ -933,17 +1318,17 @@ fn update_node_labels(
                     TextStyle {
                         font: font.clone(),
                         font_size: 14.0,
-                        color: Color::rgba(0.82, 0.9, 0.96, alpha),
+                        color: Color::srgba(0.82, 0.9, 0.96, alpha),
                     },
                 )
-                .with_style(Style {
+                .with_node(UiNode {
                     position_type: PositionType::Absolute,
                     left: Val::Px(label_pos.x),
                     top: Val::Px(label_pos.y),
                     padding: UiRect::all(Val::Px(2.0)),
                     ..default()
                 })
-                .with_background_color(Color::rgba(0.05, 0.08, 0.12, 0.6)),
+                .with_background_color(Color::srgba(0.05, 0.08, 0.12, 0.6)),
             ));
         }
     }
@@ -1100,7 +1485,7 @@ fn update_hovered_node(
     nodes: Query<(&SystemNode, &SystemIntel)>,
     mut hovered: ResMut<HoveredNode>,
 ) {
-    let window = match windows.get_single() {
+    let window = match windows.single() {
         Ok(window) => window,
         Err(_) => {
             hovered.id = None;
@@ -1120,7 +1505,7 @@ fn update_hovered_node(
         }
     };
 
-    let (camera, camera_transform) = match cameras.get_single() {
+    let (camera, camera_transform) = match cameras.single() {
         Ok(camera_pair) => camera_pair,
         Err(_) => {
             hovered.id = None;
@@ -1131,8 +1516,8 @@ fn update_hovered_node(
     };
 
     let world_pos = match camera.viewport_to_world_2d(camera_transform, cursor) {
-        Some(world_pos) => world_pos,
-        None => {
+        Ok(world_pos) => world_pos,
+        Err(_) => {
             hovered.id = None;
             hovered.modifier = None;
             hovered.screen_pos = None;
@@ -1190,12 +1575,13 @@ fn find_node_position(nodes: &[SystemNode], id: u32) -> Option<Vec2> {
 
 fn risk_color(risk: f32) -> Color {
     let t = risk.clamp(0.0, 1.0);
-    let low = Color::rgb(0.2, 0.7, 0.4);
-    let high = Color::rgb(0.9, 0.25, 0.2);
-    Color::rgb(
-        low.r() + (high.r() - low.r()) * t,
-        low.g() + (high.g() - low.g()) * t,
-        low.b() + (high.b() - low.b()) * t,
+    let low = LinearRgba::new(0.2, 0.7, 0.4, 1.0);
+    let high = LinearRgba::new(0.9, 0.25, 0.2, 1.0);
+    Color::linear_rgba(
+        low.red + (high.red - low.red) * t,
+        low.green + (high.green - low.green) * t,
+        low.blue + (high.blue - low.blue) * t,
+        1.0,
     )
 }
 
@@ -1203,11 +1589,37 @@ fn risk_color(risk: f32) -> Color {
 mod tests {
     use super::{map_center, map_zoom_presets, risk_color};
     use crate::world::{Sector, SystemNode};
-    use bevy::prelude::Vec2;
+    use bevy::prelude::{Color, LinearRgba, Vec2};
 
     fn assert_close(a: f32, b: f32) {
         let diff = (a - b).abs();
         assert!(diff < 1e-6, "expected {} close to {}", a, b);
+    }
+
+    #[allow(dead_code)]
+    fn linear_rgb(color: Color) -> (f32, f32, f32) {
+        let linear = color.to_linear();
+        (linear.red, linear.green, linear.blue)
+    }
+
+    trait LinearColorExt {
+        fn linear_r(self) -> f32;
+        fn linear_g(self) -> f32;
+        fn linear_b(self) -> f32;
+    }
+
+    impl LinearColorExt for Color {
+        fn linear_r(self) -> f32 {
+            self.to_linear().red
+        }
+
+        fn linear_g(self) -> f32 {
+            self.to_linear().green
+        }
+
+        fn linear_b(self) -> f32 {
+            self.to_linear().blue
+        }
     }
 
     #[test]
@@ -1245,17 +1657,19 @@ mod tests {
     #[test]
     fn risk_color_low_is_greenish() {
         let color = risk_color(0.0);
-        assert_close(color.r(), 0.2);
-        assert_close(color.g(), 0.7);
-        assert_close(color.b(), 0.4);
+        let linear = LinearRgba::from(color);
+        assert_close(linear.red, 0.2);
+        assert_close(linear.green, 0.7);
+        assert_close(linear.blue, 0.4);
     }
 
     #[test]
     fn risk_color_high_is_reddish() {
         let color = risk_color(1.0);
-        assert_close(color.r(), 0.9);
-        assert_close(color.g(), 0.25);
-        assert_close(color.b(), 0.2);
+        let linear = LinearRgba::from(color);
+        assert_close(linear.red, 0.9);
+        assert_close(linear.green, 0.25);
+        assert_close(linear.blue, 0.2);
     }
 
     #[test]
@@ -1287,9 +1701,21 @@ mod tests {
         let mid = risk_color(0.5);
         let low = risk_color(0.0);
         let high = risk_color(1.0);
-        assert!(mid.r() > low.r() && mid.r() < high.r());
-        assert!(mid.g() < low.g() && mid.g() > high.g());
-        assert!(mid.b() < low.b() && mid.b() > high.b());
+        let mid_linear = LinearRgba::from(mid);
+        let low_linear = LinearRgba::from(low);
+        let high_linear = LinearRgba::from(high);
+        assert!(
+            mid_linear.red > low_linear.red && mid_linear.red < high_linear.red,
+            "red component not between"
+        );
+        assert!(
+            mid_linear.green < low_linear.green && mid_linear.green > high_linear.green,
+            "green component not between"
+        );
+        assert!(
+            mid_linear.blue < low_linear.blue && mid_linear.blue > high_linear.blue,
+            "blue component not between"
+        );
     }
 
     #[test]
@@ -1298,8 +1724,12 @@ mod tests {
         let low = risk_color(0.0);
         let high = risk_color(1.0);
 
-        assert!(mid.g() < low.g());
-        assert!(mid.g() > high.g());
+        let mid_linear = LinearRgba::from(mid);
+        let low_linear = LinearRgba::from(low);
+        let high_linear = LinearRgba::from(high);
+
+        assert!(mid_linear.green < low_linear.green);
+        assert!(mid_linear.green > high_linear.green);
     }
 
     #[test]
@@ -1320,18 +1750,18 @@ mod tests {
     fn risk_color_clamps_below_zero() {
         let below = risk_color(-0.5);
         let low = risk_color(0.0);
-        assert_close(below.r(), low.r());
-        assert_close(below.g(), low.g());
-        assert_close(below.b(), low.b());
+        assert_close(below.linear_r(), low.linear_r());
+        assert_close(below.linear_g(), low.linear_g());
+        assert_close(below.linear_b(), low.linear_b());
     }
 
     #[test]
     fn risk_color_clamps_above_one() {
         let above = risk_color(1.5);
         let high = risk_color(1.0);
-        assert_close(above.r(), high.r());
-        assert_close(above.g(), high.g());
-        assert_close(above.b(), high.b());
+        assert_close(above.linear_r(), high.linear_r());
+        assert_close(above.linear_g(), high.linear_g());
+        assert_close(above.linear_b(), high.linear_b());
     }
 
     #[test]
@@ -1364,9 +1794,9 @@ mod tests {
         let low = risk_color(0.0);
         let high = risk_color(1.0);
 
-        assert!(mid.r() >= low.r() && mid.r() <= high.r());
-        assert!(mid.g() <= low.g() && mid.g() >= high.g());
-        assert!(mid.b() <= low.b() && mid.b() >= high.b());
+        assert!(mid.linear_r() >= low.linear_r() && mid.linear_r() <= high.linear_r());
+        assert!(mid.linear_g() <= low.linear_g() && mid.linear_g() >= high.linear_g());
+        assert!(mid.linear_b() <= low.linear_b() && mid.linear_b() >= high.linear_b());
     }
 
     #[test]
@@ -1419,13 +1849,13 @@ mod tests {
         let low = risk_color(0.0);
         let high = risk_color(1.0);
 
-        let expected_r = (low.r() + high.r()) * 0.5;
-        let expected_g = (low.g() + high.g()) * 0.5;
-        let expected_b = (low.b() + high.b()) * 0.5;
+        let expected_r = (low.linear_r() + high.linear_r()) * 0.5;
+        let expected_g = (low.linear_g() + high.linear_g()) * 0.5;
+        let expected_b = (low.linear_b() + high.linear_b()) * 0.5;
 
-        assert_close(mid.r(), expected_r);
-        assert_close(mid.g(), expected_g);
-        assert_close(mid.b(), expected_b);
+        assert_close(mid.linear_r(), expected_r);
+        assert_close(mid.linear_g(), expected_g);
+        assert_close(mid.linear_b(), expected_b);
     }
 
     #[test]
@@ -1433,7 +1863,7 @@ mod tests {
         let mid = risk_color(0.5);
         let low = risk_color(0.0);
 
-        assert!(mid.r() > low.r());
+        assert!(mid.linear_r() > low.linear_r());
     }
 
     #[test]
@@ -1441,7 +1871,7 @@ mod tests {
         let mid = risk_color(0.5);
         let low = risk_color(0.0);
 
-        assert!(mid.g() < low.g());
+        assert!(mid.linear_g() < low.linear_g());
     }
 
     #[test]
@@ -1449,7 +1879,7 @@ mod tests {
         let mid = risk_color(0.5);
         let low = risk_color(0.0);
 
-        assert!(mid.b() < low.b());
+        assert!(mid.linear_b() < low.linear_b());
     }
 
     #[test]
@@ -1457,7 +1887,7 @@ mod tests {
         let mid = risk_color(0.5);
         let high = risk_color(1.0);
 
-        assert!(mid.r() < high.r());
+        assert!(mid.linear_r() < high.linear_r());
     }
 
     #[test]
@@ -1465,7 +1895,7 @@ mod tests {
         let mid = risk_color(0.5);
         let high = risk_color(1.0);
 
-        assert!(mid.g() > high.g());
+        assert!(mid.linear_g() > high.linear_g());
     }
 
     #[test]
@@ -1473,7 +1903,7 @@ mod tests {
         let mid = risk_color(0.5);
         let high = risk_color(1.0);
 
-        assert!(mid.b() > high.b());
+        assert!(mid.linear_b() > high.linear_b());
     }
 
     #[test]
@@ -1587,9 +2017,9 @@ mod tests {
         let high = risk_color(1.0);
         let mid = risk_color(0.5);
 
-        assert_close(mid.r(), (low.r() + high.r()) * 0.5);
-        assert_close(mid.g(), (low.g() + high.g()) * 0.5);
-        assert_close(mid.b(), (low.b() + high.b()) * 0.5);
+        assert_close(mid.linear_r(), (low.linear_r() + high.linear_r()) * 0.5);
+        assert_close(mid.linear_g(), (low.linear_g() + high.linear_g()) * 0.5);
+        assert_close(mid.linear_b(), (low.linear_b() + high.linear_b()) * 0.5);
     }
 
     #[test]
@@ -1626,17 +2056,17 @@ mod tests {
     #[test]
     fn risk_color_low_matches_constants() {
         let low = risk_color(0.0);
-        assert_close(low.r(), 0.2);
-        assert_close(low.g(), 0.7);
-        assert_close(low.b(), 0.4);
+        assert_close(low.linear_r(), 0.2);
+        assert_close(low.linear_g(), 0.7);
+        assert_close(low.linear_b(), 0.4);
     }
 
     #[test]
     fn risk_color_high_matches_constants() {
         let high = risk_color(1.0);
-        assert_close(high.r(), 0.9);
-        assert_close(high.g(), 0.25);
-        assert_close(high.b(), 0.2);
+        assert_close(high.linear_r(), 0.9);
+        assert_close(high.linear_g(), 0.25);
+        assert_close(high.linear_b(), 0.2);
     }
 
     #[test]
@@ -1648,15 +2078,15 @@ mod tests {
     #[test]
     fn risk_color_low_green_component_max() {
         let low = risk_color(0.0);
-        assert!(low.g() > low.r());
-        assert!(low.g() > low.b());
+        assert!(low.linear_g() > low.linear_r());
+        assert!(low.linear_g() > low.linear_b());
     }
 
     #[test]
     fn risk_color_high_red_component_max() {
         let high = risk_color(1.0);
-        assert!(high.r() > high.g());
-        assert!(high.r() > high.b());
+        assert!(high.linear_r() > high.linear_g());
+        assert!(high.linear_r() > high.linear_b());
     }
 
     #[test]
@@ -1668,13 +2098,13 @@ mod tests {
     #[test]
     fn risk_color_low_blue_component_gt_red() {
         let low = risk_color(0.0);
-        assert!(low.b() > low.r());
+        assert!(low.linear_b() > low.linear_r());
     }
 
     #[test]
     fn risk_color_high_green_component_lt_blue() {
         let high = risk_color(1.0);
-        assert!(high.g() > high.b());
+        assert!(high.linear_g() > high.linear_b());
     }
 
     #[test]

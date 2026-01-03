@@ -8,17 +8,12 @@ pub enum ShipKind {
     Security,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum FleetRole {
     Scout,
     Mining,
+    #[default]
     Security,
-}
-
-impl Default for FleetRole {
-    fn default() -> Self {
-        FleetRole::Security
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
@@ -38,6 +33,39 @@ pub struct Ship {
     pub state: ShipState,
     pub fuel: f32,
     pub fuel_capacity: f32,
+}
+
+#[derive(Component, Debug, Clone, Copy)]
+pub struct Cargo {
+    pub common_ore: f32,
+    pub capacity: f32,
+}
+
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct Velocity {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Velocity {
+    #[allow(dead_code)]
+    pub fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+
+    #[allow(dead_code)]
+    pub fn as_vec2(&self) -> Vec2 {
+        Vec2::new(self.x, self.y)
+    }
+}
+
+pub fn cargo_capacity(kind: ShipKind) -> f32 {
+    match kind {
+        ShipKind::PlayerShip => 40.0,
+        ShipKind::Scout => 10.0,
+        ShipKind::Miner => 60.0,
+        ShipKind::Security => 20.0,
+    }
 }
 
 #[derive(Component, Debug, Clone, Copy)]
@@ -80,7 +108,7 @@ pub fn ship_fuel_burn_per_minute(kind: ShipKind) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ship_default_role, FleetRole, ShipKind};
+    use super::{cargo_capacity, ship_default_role, FleetRole, ShipKind};
 
     #[test]
     fn ship_default_role_player_is_security() {
@@ -385,5 +413,12 @@ mod tests {
     fn ship_default_role_miner_not_scout() {
         let miner = ship_default_role(ShipKind::Miner);
         assert_ne!(miner, FleetRole::Scout);
+    }
+
+    #[test]
+    fn cargo_capacity_player_exceeds_scout() {
+        let player = cargo_capacity(ShipKind::PlayerShip);
+        let scout = cargo_capacity(ShipKind::Scout);
+        assert!(player > scout);
     }
 }

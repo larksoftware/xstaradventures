@@ -1,13 +1,19 @@
 use bevy::prelude::*;
 
-use crate::plugins::core::{EventLog, GameState, InputBindings};
+use crate::compat::SpatialBundle;
+
+use crate::fleets::{RiskTolerance, ScoutBehavior};
+use crate::pirates::PirateBase;
+use crate::plugins::core::{DebugWindow, EventLog, GameState, InputBindings};
+use crate::plugins::player::PlayerControl;
 use crate::plugins::sim::SimTickCount;
 use crate::ships::{
-    ship_default_role, ship_fuel_capacity, Fleet, Ship, ShipFuelAlert, ShipKind, ShipState,
+    cargo_capacity, ship_default_role, ship_fuel_capacity, Cargo, Fleet, Ship, ShipFuelAlert,
+    ShipKind, ShipState, Velocity,
 };
 use crate::stations::{
-    station_build_time_seconds, station_fuel_capacity, Station, StationBuild, StationKind,
-    StationState,
+    station_build_time_seconds, station_fuel_capacity, Station, StationBuild, StationCrisisLog,
+    StationKind, StationState,
 };
 use crate::world::{KnowledgeLayer, RouteEdge, Sector, SystemIntel, SystemNode, ZoneModifier};
 
@@ -28,9 +34,14 @@ impl Plugin for WorldGenPlugin {
                     handle_clear_reveal,
                     handle_debug_spawns,
                 )
-                    .run_if(in_state(GameState::InGame)),
+                    .run_if(in_state(GameState::InGame))
+                    .run_if(debug_window_open),
             );
     }
+}
+
+fn debug_window_open(debug_window: Res<DebugWindow>) -> bool {
+    debug_window.open
 }
 
 #[derive(Resource)]
@@ -40,7 +51,7 @@ pub struct WorldSeed {
 
 impl Default for WorldSeed {
     fn default() -> Self {
-        Self { value: 1337 }
+        Self { value: 12345 }
     }
 }
 
@@ -78,7 +89,9 @@ fn apply_seed_world(commands: &mut Commands, sector: &mut Sector, seed: u64) {
                 revealed_tick: 0,
             },
             Name::new(format!("SystemNode-{}-{}", seed, node_id)),
-            SpatialBundle::from_transform(Transform::from_xyz(position.x, position.y, 0.0)),
+            Transform::from_xyz(position.x, position.y, 0.0),
+            GlobalTransform::default(),
+            Visibility::default(),
         ));
 
         nodes.push(node);
@@ -100,9 +113,11 @@ fn apply_seed_world(commands: &mut Commands, sector: &mut Sector, seed: u64) {
 
     sector.nodes = nodes;
 
-    spawn_station_stub(commands, sector);
+    spawn_starting_entities(commands, sector);
+    spawn_pirate_base(commands, sector);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_seed_input(
     input: Res<ButtonInput<KeyCode>>,
     bindings: Res<InputBindings>,
@@ -237,6 +252,7 @@ fn handle_debug_spawns(
             StationBuild {
                 remaining_seconds: build_time,
             },
+            StationCrisisLog::default(),
             Name::new(format!("Station-Spawned-{}", node.id)),
             SpatialBundle::from_transform(Transform::from_xyz(
                 node.position.x + 40.0,
@@ -247,25 +263,7 @@ fn handle_debug_spawns(
     }
 
     if input.just_pressed(bindings.spawn_ship) {
-        let capacity = ship_fuel_capacity(ShipKind::Scout);
-        commands.spawn((
-            Ship {
-                kind: ShipKind::Scout,
-                state: ShipState::Idle,
-                fuel: capacity * 0.8,
-                fuel_capacity: capacity,
-            },
-            Fleet {
-                role: ship_default_role(ShipKind::Scout),
-            },
-            ShipFuelAlert::default(),
-            Name::new(format!("Ship-Spawned-{}", node.id)),
-            SpatialBundle::from_transform(Transform::from_xyz(
-                node.position.x - 40.0,
-                node.position.y - 20.0,
-                0.4,
-            )),
-        ));
+        spawn_ship_stub(&mut commands, node);
     }
 }
 
@@ -328,7 +326,7 @@ fn update_sector_modifier(sector: &mut Sector, id: u32, modifier: Option<ZoneMod
     }
 }
 
-fn spawn_station_stub(commands: &mut Commands, sector: &Sector) {
+fn spawn_starting_entities(commands: &mut Commands, sector: &Sector) {
     let first = match sector.nodes.first() {
         Some(node) => node,
         None => {
@@ -336,34 +334,37 @@ fn spawn_station_stub(commands: &mut Commands, sector: &Sector) {
         }
     };
 
-    let kind = StationKind::MiningOutpost;
-    let capacity = station_fuel_capacity(kind);
-    let build_time = station_build_time_seconds(kind);
+    spawn_player_ship(commands, first);
+}
+
+fn spawn_player_ship(commands: &mut Commands, node: &SystemNode) {
+    let capacity = ship_fuel_capacity(ShipKind::PlayerShip);
+    let x = node.position.x - 8.0;
+    let y = node.position.y - 24.0;
+
+    info!("Spawning player ship at ({:.1}, {:.1}, 0.4)", x, y);
 
     commands.spawn((
-        Station {
-            kind,
-            state: StationState::Deploying,
-            fuel: capacity * 0.6,
+        Ship {
+            kind: ShipKind::PlayerShip,
+            state: ShipState::Idle,
+            fuel: capacity * 0.9,
             fuel_capacity: capacity,
         },
-        StationBuild {
-            remaining_seconds: build_time,
+        Cargo {
+            common_ore: 0.0,
+            capacity: cargo_capacity(ShipKind::PlayerShip),
         },
-        Name::new(format!("Station-{}", first.id)),
-        SpatialBundle::from_transform(Transform::from_xyz(
-            first.position.x + 24.0,
-            first.position.y + 12.0,
-            0.5,
-        )),
+        Velocity::default(),
+        PlayerControl,
+        ShipFuelAlert::default(),
+        Name::new("Ship-Player"),
+        SpatialBundle::from_transform(Transform::from_xyz(x, y, 0.4)),
     ));
-
-    spawn_ship_stub(commands, first);
 }
 
 fn spawn_ship_stub(commands: &mut Commands, node: &SystemNode) {
     let scout_capacity = ship_fuel_capacity(ShipKind::Scout);
-    let miner_capacity = ship_fuel_capacity(ShipKind::Miner);
 
     commands.spawn((
         Ship {
@@ -372,8 +373,18 @@ fn spawn_ship_stub(commands: &mut Commands, node: &SystemNode) {
             fuel: scout_capacity * 0.7,
             fuel_capacity: scout_capacity,
         },
+        Cargo {
+            common_ore: 0.0,
+            capacity: cargo_capacity(ShipKind::Scout),
+        },
         Fleet {
             role: ship_default_role(ShipKind::Scout),
+        },
+        ScoutBehavior {
+            risk: RiskTolerance::Balanced,
+            current_node: node.id,
+            target_node: None,
+            next_decision_tick: 0,
         },
         ShipFuelAlert::default(),
         Name::new("Ship-Scout"),
@@ -383,23 +394,26 @@ fn spawn_ship_stub(commands: &mut Commands, node: &SystemNode) {
             0.4,
         )),
     ));
+}
+
+fn spawn_pirate_base(commands: &mut Commands, sector: &Sector) {
+    let target = match sector.nodes.last() {
+        Some(node) => node,
+        None => {
+            return;
+        }
+    };
 
     commands.spawn((
-        Ship {
-            kind: ShipKind::Miner,
-            state: ShipState::Idle,
-            fuel: miner_capacity * 0.6,
-            fuel_capacity: miner_capacity,
+        PirateBase {
+            launch_interval_ticks: 300,
+            next_launch_tick: 120,
         },
-        Fleet {
-            role: ship_default_role(ShipKind::Miner),
-        },
-        ShipFuelAlert::default(),
-        Name::new("Ship-Miner"),
+        Name::new("Pirate-Base"),
         SpatialBundle::from_transform(Transform::from_xyz(
-            node.position.x - 36.0,
-            node.position.y + 8.0,
-            0.4,
+            target.position.x + 50.0,
+            target.position.y - 30.0,
+            0.45,
         )),
     ));
 }
@@ -455,7 +469,7 @@ fn scale_to_range(value: f32, min: f32, max: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::system::CommandQueue;
+    use bevy::ecs::world::CommandQueue;
 
     #[test]
     fn seed_to_node_id_wraps_large_values() {

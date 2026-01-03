@@ -48,28 +48,6 @@ xstar-adventures/
 - Pure logic in testable modules
 - State transitions must be unit-tested
 
-### Testing
-- Tests go **in the same file**, at the bottom using `#[cfg(test)]` module
-- Do **not** create separate `tests/*.rs` files
-- Design code with testability in mind before implementation begins
-
-```rust
-// src/station.rs
-pub fn calculate_efficiency(crew: u32, damage: f32) -> f32 {
-    // ...
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn efficiency_scales_with_crew() {
-        // ...
-    }
-}
-```
-
 ---
 
 ## Commands

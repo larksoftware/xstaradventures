@@ -8,9 +8,11 @@ description = "System-first space sandbox built with Bevy."
 license = "UNLICENSED"
 
 [dependencies]
-bevy = "0.13"
+bevy = "0.17.3"
 ron = "0.8"
 serde = { version = "1", features = ["derive"] }
+
+taffy = "0.7"
 
 [dev-dependencies]
 cargo-llvm-cov = "0.6"
