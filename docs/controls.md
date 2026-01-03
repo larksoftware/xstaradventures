@@ -38,7 +38,8 @@ Press `F3` to open/close the debug window. All debug commands require **Shift** 
 - `Shift+U`: reveal all nodes.
 - `Shift+Z`: clear reveals.
 - `Shift+B`: spawn FuelDepot.
-- `Shift+J`: spawn Scout.
+- `Shift+S`: spawn Scout.
+- `Shift+P`: spawn Pirate.
 
 ### Map & Debug Rendering (debug window only)
 
@@ -46,7 +47,6 @@ Press `F3` to open/close the debug window. All debug commands require **Shift** 
 - `Shift+R`: toggle route rendering.
 - `Shift+F`: toggle fog/intel rings.
 - `Shift+G`: toggle map grid.
-- `Shift+P`: toggle world backdrop.
 - `Shift+T`: toggle route labels (distance + risk).
 - `Shift+Y`: toggle node labels.
 - `Shift+I`: refresh intel confidence to full.

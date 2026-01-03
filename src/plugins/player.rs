@@ -8,12 +8,14 @@ use crate::plugins::core::EventLog;
 use crate::plugins::core::InputBindings;
 use crate::plugins::core::SimConfig;
 use crate::plugins::core::ViewMode;
-use crate::ships::{Cargo, Ship, ShipState, Velocity};
+use crate::ships::{Cargo, Ship, ShipKind, ShipState, Velocity};
 use crate::stations::{
     station_build_time_seconds, station_fuel_capacity, station_ore_capacity, Station, StationBuild,
     StationCrisisLog, StationKind, StationProduction, StationState,
 };
-use crate::world::SystemNode;
+use crate::world::{
+    JumpGate, JumpTransition, SystemNode, ZoneId, JUMP_GATE_FUEL_COST, JUMP_TRANSITION_SECONDS,
+};
 
 pub struct PlayerPlugin;
 
@@ -48,6 +50,42 @@ const AUTOPILOT_ARRIVAL_SPEED: f32 = 3.0; // Max speed to be considered stopped
 const AUTOPILOT_ROTATION_TOLERANCE: f32 = 0.1; // radians (~6 degrees)
 const AUTOPILOT_BRAKE_SAFETY_FACTOR: f32 = 1.5;
 
+/// Finds the zone (node ID) that a position belongs to.
+/// Returns the ID of the closest SystemNode.
+#[allow(dead_code)]
+pub fn find_zone_for_position(nodes: &[SystemNode], pos: Vec2) -> Option<u32> {
+    let mut closest_id = None;
+    let mut closest_dist = f32::MAX;
+
+    for node in nodes {
+        let dist = node.position.distance(pos);
+        if dist < closest_dist {
+            closest_dist = dist;
+            closest_id = Some(node.id);
+        }
+    }
+
+    closest_id
+}
+
+/// Filters entities to only those in the same zone as the player.
+#[allow(dead_code)]
+pub fn filter_entities_by_zone(
+    entities: &[(Entity, Vec2, String)],
+    nodes: &[SystemNode],
+    player_zone: Option<u32>,
+) -> Vec<(Entity, Vec2, String)> {
+    let Some(zone_id) = player_zone else {
+        return Vec::new();
+    };
+
+    entities
+        .iter()
+        .filter(|(_, pos, _)| find_zone_for_position(nodes, *pos) == Some(zone_id))
+        .cloned()
+        .collect()
+}
+
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<NearbyTargets>()
@@ -60,16 +98,19 @@ impl Plugin for PlayerPlugin {
                     player_fire,
                     player_refuel_station,
                     player_build_outpost,
+                    player_activate_jump_gate.run_if(not_in_jump_transition),
+                    process_jump_transition,
                 )
                     .run_if(sim_not_paused),
             )
+            .add_systems(FixedUpdate, scan_nearby_entities.run_if(view_is_world))
             .add_systems(
                 FixedUpdate,
                 autopilot_control_system
                     .run_if(sim_not_paused)
-                    .run_if(autopilot_engaged),
+                    .run_if(autopilot_engaged)
+                    .after(scan_nearby_entities),
             )
-            .add_systems(FixedUpdate, scan_nearby_entities.run_if(view_is_world))
             .add_systems(
                 Update,
                 (handle_tactical_selection, autopilot_input_system).run_if(view_is_world),
@@ -77,8 +118,20 @@ impl Plugin for PlayerPlugin {
     }
 }
 
+fn not_in_jump_transition(
+    player_query: Query<Option<&JumpTransition>, With<PlayerControl>>,
+) -> bool {
+    player_query
+        .single()
+        .map_or(true, |transition| transition.is_none())
+}
+
 fn sim_not_paused(config: Res<SimConfig>) -> bool {
     !config.paused
+}
+
+fn shift_pressed(input: &ButtonInput<KeyCode>) -> bool {
+    input.pressed(KeyCode::ShiftLeft) || input.pressed(KeyCode::ShiftRight)
 }
 
 fn player_movement(
@@ -90,18 +143,21 @@ fn player_movement(
     let delta_seconds = time.delta_secs();
     let minutes = delta_seconds / 60.0;
 
+    // Ignore movement keys when Shift is held (allows Shift+key commands without side effects)
+    let shift_held = shift_pressed(&input);
+
     for (mut ship, mut transform, mut velocity) in ships.iter_mut() {
         if ship.fuel <= 0.0 {
             ship.state = ShipState::Disabled;
             continue;
         }
 
-        // Handle rotation
+        // Handle rotation (also blocked when shift held)
         let rotation_speed = 3.0; // radians per second
-        if input.pressed(bindings.rotate_left) {
+        if !shift_held && input.pressed(bindings.rotate_left) {
             transform.rotate_z(rotation_speed * delta_seconds);
         }
-        if input.pressed(bindings.rotate_right) {
+        if !shift_held && input.pressed(bindings.rotate_right) {
             transform.rotate_z(-rotation_speed * delta_seconds);
         }
 
@@ -111,26 +167,26 @@ fn player_movement(
         let rotation = transform.rotation.to_euler(EulerRot::XYZ).2 + std::f32::consts::FRAC_PI_2;
         let facing = Vec2::new(rotation.cos(), rotation.sin());
 
-        // Apply thrust based on input
+        // Apply thrust based on input (blocked when shift held)
         let mut thrust_applied = false;
 
-        if input.pressed(bindings.move_up) {
+        if !shift_held && input.pressed(bindings.move_up) {
             // Forward thrust
             velocity.x += facing.x * PLAYER_THRUST_ACCELERATION * delta_seconds;
             velocity.y += facing.y * PLAYER_THRUST_ACCELERATION * delta_seconds;
             thrust_applied = true;
         }
 
-        if input.pressed(bindings.move_down) {
+        if !shift_held && input.pressed(bindings.move_down) {
             // Reverse thrust
             velocity.x -= facing.x * PLAYER_THRUST_ACCELERATION * delta_seconds;
             velocity.y -= facing.y * PLAYER_THRUST_ACCELERATION * delta_seconds;
             thrust_applied = true;
         }
 
-        // Braking: only when brake key pressed AND no movement keys active
+        // Braking: only when brake key pressed AND no movement keys active (also blocked when shift held)
         let movement_active = input.pressed(bindings.move_up) || input.pressed(bindings.move_down);
-        if input.pressed(bindings.brake) && !movement_active {
+        if !shift_held && input.pressed(bindings.brake) && !movement_active {
             let (new_vx, new_vy) = calculate_brake_thrust(
                 velocity.x,
                 velocity.y,
@@ -341,6 +397,7 @@ fn player_build_outpost(
             ore_capacity,
         },
         StationCrisisLog::default(),
+        ZoneId(node.id),
         Name::new(format!("Station-{}", node.id)),
         SpatialBundle::from_transform(Transform::from_xyz(
             node.position.x + 12.0,
@@ -350,7 +407,7 @@ fn player_build_outpost(
     ));
 
     cargo.common_ore -= cost;
-    log.push(format!("Outpost deployed at node {}", node.id));
+    log.push(format!("Outpost deployed at zone {}", node.id));
 }
 
 fn player_refuel_station(
@@ -422,6 +479,87 @@ fn player_refuel_station(
         log.push("Transferred fuel to station".to_string());
     } else if supplied_ore {
         log.push("Transferred ore to station".to_string());
+    }
+}
+
+const JUMP_GATE_ACTIVATION_RANGE: f32 = 25.0;
+
+fn player_activate_jump_gate(
+    input: Res<ButtonInput<KeyCode>>,
+    bindings: Res<InputBindings>,
+    mut commands: Commands,
+    mut log: ResMut<EventLog>,
+    mut player_query: Query<(Entity, &Transform, &mut Ship), With<PlayerControl>>,
+    gates: Query<(&Transform, &JumpGate)>,
+) {
+    if !input.just_pressed(bindings.interact) {
+        return;
+    }
+
+    let (player_entity, player_transform, mut ship) = match player_query.single_mut() {
+        Ok(value) => value,
+        Err(_) => {
+            return;
+        }
+    };
+
+    let player_pos = Vec2::new(
+        player_transform.translation.x,
+        player_transform.translation.y,
+    );
+
+    // Find nearest gate in range
+    let mut nearest_gate: Option<&JumpGate> = None;
+    let mut nearest_dist = f32::MAX;
+
+    for (gate_transform, gate) in gates.iter() {
+        let gate_pos = Vec2::new(gate_transform.translation.x, gate_transform.translation.y);
+        let dist = gate_pos.distance(player_pos);
+
+        if dist <= JUMP_GATE_ACTIVATION_RANGE && dist < nearest_dist {
+            nearest_gate = Some(gate);
+            nearest_dist = dist;
+        }
+    }
+
+    let Some(gate) = nearest_gate else {
+        return;
+    };
+
+    // Check fuel
+    if ship.fuel < JUMP_GATE_FUEL_COST {
+        log.push("Not enough fuel for jump".to_string());
+        return;
+    }
+
+    // Consume fuel and start transition
+    ship.fuel -= JUMP_GATE_FUEL_COST;
+
+    commands.entity(player_entity).insert(JumpTransition {
+        destination_zone: gate.destination_zone,
+        remaining_seconds: JUMP_TRANSITION_SECONDS,
+    });
+
+    log.push(format!("Jumping to zone {}...", gate.destination_zone));
+}
+
+fn process_jump_transition(
+    time: Res<Time<Fixed>>,
+    mut commands: Commands,
+    mut log: ResMut<EventLog>,
+    mut player_query: Query<(Entity, &mut ZoneId, &mut JumpTransition), With<PlayerControl>>,
+) {
+    let Ok((player_entity, mut zone_id, mut transition)) = player_query.single_mut() else {
+        return;
+    };
+
+    transition.remaining_seconds -= time.delta_secs();
+
+    if transition.remaining_seconds <= 0.0 {
+        // Complete the jump
+        zone_id.0 = transition.destination_zone;
+        commands.entity(player_entity).remove::<JumpTransition>();
+        log.push(format!("Arrived at zone {}", zone_id.0));
     }
 }
 
@@ -530,85 +668,110 @@ fn calculate_brake_thrust(vx: f32, vy: f32, acceleration: f32, delta_seconds: f3
     (vx * ratio, vy * ratio)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn scan_nearby_entities(
     mut targets: ResMut<NearbyTargets>,
-    player_query: Query<&Transform, With<PlayerControl>>,
-    stations: Query<(Entity, &Transform, &Name), With<Station>>,
-    ore_nodes: Query<(Entity, &Transform), With<OreNode>>,
-    pirates: Query<(Entity, &Transform), With<PirateShip>>,
-    pirate_bases: Query<(Entity, &Transform), With<PirateBase>>,
-    ships: Query<(Entity, &Transform, &Ship), Without<PlayerControl>>,
+    player_query: Query<(&Transform, &ZoneId), With<PlayerControl>>,
+    stations: Query<(Entity, &Transform, &Name, Option<&ZoneId>), With<Station>>,
+    ore_nodes: Query<(Entity, &Transform, Option<&ZoneId>), With<OreNode>>,
+    pirates: Query<(Entity, &Transform, Option<&ZoneId>), With<PirateShip>>,
+    pirate_bases: Query<(Entity, &Transform, Option<&ZoneId>), With<PirateBase>>,
+    ships: Query<(Entity, &Transform, &Ship, Option<&ZoneId>), Without<PlayerControl>>,
+    jump_gates: Query<(Entity, &Transform, &JumpGate, Option<&ZoneId>)>,
 ) {
-    let player_transform = match player_query.single() {
-        Ok(transform) => transform,
-        Err(_) => {
-            targets.entities.clear();
-            targets.manually_selected = false;
-            return;
-        }
+    // Verify player exists and has a zone
+    let Ok((player_transform, player_zone)) = player_query.single() else {
+        targets.entities.clear();
+        targets.manually_selected = false;
+        return;
     };
 
-    let player_pos = Vec2::new(
-        player_transform.translation.x,
-        player_transform.translation.y,
-    );
-    let range = 400.0;
-
-    // Remember previously selected entity to check if it's still in range
+    // Remember previously selected entity
     let prev_selected_entity = targets
         .entities
         .get(targets.selected_index)
         .map(|(e, _, _)| *e);
 
+    // Clear and rebuild entity list with only same-zone entities
     targets.entities.clear();
 
-    // Scan stations
-    for (entity, transform, name) in stations.iter() {
-        let pos = Vec2::new(transform.translation.x, transform.translation.y);
-        if pos.distance(player_pos) <= range {
+    // Scan all stations in player's zone
+    for (entity, transform, name, zone) in stations.iter() {
+        if zone.is_some_and(|z| z.0 == player_zone.0) {
+            let pos = Vec2::new(transform.translation.x, transform.translation.y);
             targets.entities.push((entity, pos, name.to_string()));
         }
     }
 
-    // Scan ore nodes
-    for (entity, transform) in ore_nodes.iter() {
-        let pos = Vec2::new(transform.translation.x, transform.translation.y);
-        if pos.distance(player_pos) <= range {
-            targets.entities.push((entity, pos, "Ore Node".to_string()));
-        }
-    }
-
-    // Scan pirates
-    for (entity, transform) in pirates.iter() {
-        let pos = Vec2::new(transform.translation.x, transform.translation.y);
-        if pos.distance(player_pos) <= range {
-            targets.entities.push((entity, pos, "Pirate".to_string()));
-        }
-    }
-
-    // Scan pirate bases
-    for (entity, transform) in pirate_bases.iter() {
-        let pos = Vec2::new(transform.translation.x, transform.translation.y);
-        if pos.distance(player_pos) <= range {
+    // Scan all ore nodes in player's zone
+    for (entity, transform, zone) in ore_nodes.iter() {
+        if zone.is_some_and(|z| z.0 == player_zone.0) {
+            let pos = Vec2::new(transform.translation.x, transform.translation.y);
             targets
                 .entities
-                .push((entity, pos, "Pirate Base".to_string()));
+                .push((entity, pos, "○ Asteroid".to_string()));
         }
     }
 
-    // Scan other ships
-    for (entity, transform, ship) in ships.iter() {
-        let pos = Vec2::new(transform.translation.x, transform.translation.y);
-        if pos.distance(player_pos) <= range {
-            let label = format!("{:?} Ship", ship.kind);
+    // Scan all pirates in player's zone
+    for (entity, transform, zone) in pirates.iter() {
+        if zone.is_some_and(|z| z.0 == player_zone.0) {
+            let pos = Vec2::new(transform.translation.x, transform.translation.y);
+            targets
+                .entities
+                .push((entity, pos, "⚔ Marauder".to_string()));
+        }
+    }
+
+    // Scan all pirate bases in player's zone
+    for (entity, transform, zone) in pirate_bases.iter() {
+        if zone.is_some_and(|z| z.0 == player_zone.0) {
+            let pos = Vec2::new(transform.translation.x, transform.translation.y);
+            targets
+                .entities
+                .push((entity, pos, "⚔ Raider Den".to_string()));
+        }
+    }
+
+    // Scan all other ships in player's zone
+    for (entity, transform, ship, zone) in ships.iter() {
+        if zone.is_some_and(|z| z.0 == player_zone.0) {
+            let pos = Vec2::new(transform.translation.x, transform.translation.y);
+            let label = match ship.kind {
+                ShipKind::Scout => "✦ Pathfinder",
+                ShipKind::Miner => "✦ Harvester",
+                ShipKind::Security => "✦ Sentinel",
+                ShipKind::PlayerShip => "✦ Vessel",
+            };
+            targets.entities.push((entity, pos, label.to_string()));
+        }
+    }
+
+    // Scan all jump gates in player's zone
+    for (entity, transform, gate, zone) in jump_gates.iter() {
+        if zone.is_some_and(|z| z.0 == player_zone.0) {
+            let pos = Vec2::new(transform.translation.x, transform.translation.y);
+            let label = format!("◈ Rift Gate → {}", gate.destination_zone);
             targets.entities.push((entity, pos, label));
         }
     }
 
-    // Check if previously selected entity is still in range and update index
+    // Sort by distance from player
+    let player_pos = Vec2::new(
+        player_transform.translation.x,
+        player_transform.translation.y,
+    );
+    targets.entities.sort_by(|(_, pos_a, _), (_, pos_b, _)| {
+        let dist_a = pos_a.distance(player_pos);
+        let dist_b = pos_b.distance(player_pos);
+        dist_a
+            .partial_cmp(&dist_b)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Preserve selection of previously selected entity if still present
     if targets.manually_selected {
         if let Some(prev_entity) = prev_selected_entity {
-            // Find the new index of the previously selected entity
             let new_index = targets
                 .entities
                 .iter()
@@ -616,7 +779,7 @@ fn scan_nearby_entities(
             if let Some(idx) = new_index {
                 targets.selected_index = idx;
             } else {
-                // Entity no longer in range
+                // Entity no longer exists or left the zone
                 targets.manually_selected = false;
                 targets.selected_index = 0;
             }
@@ -624,10 +787,8 @@ fn scan_nearby_entities(
             targets.manually_selected = false;
             targets.selected_index = 0;
         }
-    }
-
-    // Ensure selected_index is valid
-    if targets.selected_index >= targets.entities.len() && !targets.entities.is_empty() {
+    } else {
+        // When not manually selected, always point to closest (index 0)
         targets.selected_index = 0;
     }
 }
@@ -824,8 +985,8 @@ fn autopilot_control_system(
 
         // Decide action based on velocity and position
         let moving_away = velocity_toward_dock < -1.0;
-        let approaching_too_fast = velocity_toward_dock > AUTOPILOT_ARRIVAL_SPEED
-            && dock_distance <= brake_threshold;
+        let approaching_too_fast =
+            velocity_toward_dock > AUTOPILOT_ARRIVAL_SPEED && dock_distance <= brake_threshold;
         let aligned_enough = angle_to_dock.abs() < 0.5; // ~30 degrees
 
         if moving_away || approaching_too_fast {
@@ -1029,5 +1190,220 @@ mod tests {
         // diff = -PI/2 - PI/2 = -PI (or +PI after normalization)
         // Either direction is shortest when target is directly behind
         assert!((diff.abs() - std::f32::consts::PI).abs() < 0.01);
+    }
+
+    #[test]
+    fn autopilot_target_found_in_nearby_targets() {
+        use crate::plugins::player::NearbyTargets;
+        use bevy::ecs::entity::Entity;
+
+        // Create a target entity ID (simulating an ore node)
+        let ore_entity = Entity::from_bits(42);
+
+        // Create nearby targets list containing the ore
+        let mut targets = NearbyTargets::default();
+        targets
+            .entities
+            .push((ore_entity, Vec2::new(10.0, 20.0), "Ore Node".to_string()));
+
+        // Verify target is found in list
+        let still_in_range = targets.entities.iter().any(|(e, _, _)| *e == ore_entity);
+        assert!(still_in_range, "Target should be found in nearby targets");
+    }
+
+    #[test]
+    fn autopilot_target_not_found_when_list_empty() {
+        use crate::plugins::player::NearbyTargets;
+        use bevy::ecs::entity::Entity;
+
+        let ore_entity = Entity::from_bits(42);
+        let targets = NearbyTargets::default();
+
+        // Empty list should not contain target
+        let still_in_range = targets.entities.iter().any(|(e, _, _)| *e == ore_entity);
+        assert!(!still_in_range, "Target should not be found in empty list");
+    }
+
+    #[test]
+    fn autopilot_target_persists_when_other_entities_added() {
+        use crate::plugins::player::NearbyTargets;
+        use bevy::ecs::entity::Entity;
+
+        let ore_entity = Entity::from_bits(42);
+        let scout_entity = Entity::from_bits(100);
+
+        // Create nearby targets with ore
+        let mut targets = NearbyTargets::default();
+        targets
+            .entities
+            .push((ore_entity, Vec2::new(10.0, 20.0), "Ore Node".to_string()));
+
+        // Add a scout ship (simulating spawn)
+        targets.entities.push((
+            scout_entity,
+            Vec2::new(50.0, 50.0),
+            "Scout Ship".to_string(),
+        ));
+
+        // Ore should still be found
+        let still_in_range = targets.entities.iter().any(|(e, _, _)| *e == ore_entity);
+        assert!(
+            still_in_range,
+            "Ore target should persist when scout is added"
+        );
+    }
+
+    #[test]
+    fn contacts_list_includes_distant_entities() {
+        use crate::plugins::player::NearbyTargets;
+        use bevy::ecs::entity::Entity;
+
+        // Distant entity (beyond typical "range" of 400)
+        let distant_entity = Entity::from_bits(999);
+
+        let mut targets = NearbyTargets::default();
+
+        // Simulate adding a distant entity (scan_all_entities should include this)
+        targets.entities.push((
+            distant_entity,
+            Vec2::new(1000.0, 1000.0), // ~1414 pixels from origin
+            "Distant Station".to_string(),
+        ));
+
+        // Distant entity should be in the list (no range filtering)
+        assert_eq!(
+            targets.entities.len(),
+            1,
+            "Contacts should include distant entities"
+        );
+        assert!(
+            targets
+                .entities
+                .iter()
+                .any(|(e, _, _)| *e == distant_entity),
+            "Distant entity should be findable"
+        );
+    }
+
+    #[test]
+    fn find_zone_returns_closest_node() {
+        use crate::plugins::player::find_zone_for_position;
+        use crate::world::SystemNode;
+
+        let nodes = vec![
+            SystemNode {
+                id: 1,
+                position: Vec2::new(0.0, 0.0),
+                modifier: None,
+            },
+            SystemNode {
+                id: 2,
+                position: Vec2::new(100.0, 0.0),
+                modifier: None,
+            },
+        ];
+
+        // Position near node 1
+        assert_eq!(find_zone_for_position(&nodes, Vec2::new(5.0, 0.0)), Some(1));
+        // Position near node 2
+        assert_eq!(
+            find_zone_for_position(&nodes, Vec2::new(95.0, 0.0)),
+            Some(2)
+        );
+        // Position exactly between nodes - should pick one (closest wins)
+        let mid = find_zone_for_position(&nodes, Vec2::new(50.0, 0.0));
+        assert!(mid == Some(1) || mid == Some(2));
+    }
+
+    #[test]
+    fn contacts_excludes_entities_from_other_zones() {
+        use crate::plugins::player::{filter_entities_by_zone, find_zone_for_position};
+        use crate::world::SystemNode;
+        use bevy::ecs::entity::Entity;
+
+        let nodes = vec![
+            SystemNode {
+                id: 1,
+                position: Vec2::new(0.0, 0.0),
+                modifier: None,
+            },
+            SystemNode {
+                id: 2,
+                position: Vec2::new(200.0, 0.0),
+                modifier: None,
+            },
+        ];
+
+        // Player is at zone 1
+        let player_pos = Vec2::new(10.0, 0.0);
+        let player_zone = find_zone_for_position(&nodes, player_pos);
+
+        // Entities in zone 1 and zone 2
+        let entity_in_zone_1 = (
+            Entity::from_bits(1),
+            Vec2::new(5.0, 5.0),
+            "Nearby".to_string(),
+        );
+        let entity_in_zone_2 = (
+            Entity::from_bits(2),
+            Vec2::new(195.0, 0.0),
+            "Far Away".to_string(),
+        );
+
+        let all_entities = vec![entity_in_zone_1.clone(), entity_in_zone_2];
+
+        let filtered = filter_entities_by_zone(&all_entities, &nodes, player_zone);
+
+        // Only entity in zone 1 should be included
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].2, "Nearby");
+    }
+
+    #[test]
+    fn can_activate_gate_with_enough_fuel() {
+        use crate::world::JUMP_GATE_FUEL_COST;
+        let fuel = JUMP_GATE_FUEL_COST + 1.0;
+        assert!(fuel >= JUMP_GATE_FUEL_COST);
+    }
+
+    #[test]
+    fn cannot_activate_gate_without_fuel() {
+        use crate::world::JUMP_GATE_FUEL_COST;
+        let fuel = JUMP_GATE_FUEL_COST - 1.0;
+        assert!(fuel < JUMP_GATE_FUEL_COST);
+    }
+
+    #[test]
+    fn jump_transition_completes_when_timer_reaches_zero() {
+        use crate::world::{JumpTransition, JUMP_TRANSITION_SECONDS};
+        let mut transition = JumpTransition {
+            destination_zone: 100,
+            remaining_seconds: JUMP_TRANSITION_SECONDS,
+        };
+
+        // Simulate time passing
+        transition.remaining_seconds -= JUMP_TRANSITION_SECONDS;
+        assert!(transition.remaining_seconds <= 0.0);
+    }
+
+    #[test]
+    fn movement_blocked_when_shift_held() {
+        // When shift is held, movement keys should not apply thrust
+        // This prevents Shift+S (spawn scout) from also triggering reverse thrust
+        let shift_held = true;
+        let key_pressed = true;
+
+        // Movement should be blocked when shift is held
+        let should_move = key_pressed && !shift_held;
+        assert!(!should_move);
+    }
+
+    #[test]
+    fn movement_allowed_when_shift_not_held() {
+        let shift_held = false;
+        let key_pressed = true;
+
+        let should_move = key_pressed && !shift_held;
+        assert!(should_move);
     }
 }

@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::compat::SpatialBundle;
 
-use crate::fleets::{next_risk, risk_threshold, scout_confidence, RiskTolerance, ScoutBehavior};
+use crate::fleets::{next_risk, RiskTolerance, ScoutBehavior, ScoutPhase};
 use crate::ore::{OreKind, OreNode};
 use crate::pirates::{schedule_next_launch, PirateBase, PirateShip};
 use crate::plugins::core::{EventLog, InputBindings};
@@ -14,7 +14,8 @@ use crate::stations::{
     Station, StationBuild, StationCrisis, StationCrisisLog, StationProduction, StationState,
 };
 use crate::world::{
-    zone_modifier_effect, KnowledgeLayer, Sector, SystemIntel, SystemNode, ZoneModifier,
+    zone_modifier_effect, JumpGate, KnowledgeLayer, Sector, SystemIntel, SystemNode, ZoneId,
+    ZoneModifier, JUMP_TRANSITION_SECONDS,
 };
 
 pub struct SimPlugin;
@@ -563,104 +564,191 @@ fn handle_scout_risk_input(
     }
 }
 
+const SCOUT_SPEED: f32 = 80.0;
+const SCOUT_GATE_RANGE: f32 = 25.0;
+
 #[allow(clippy::type_complexity)]
 fn scout_behavior(
     time: Res<Time<Fixed>>,
     ticks: Res<SimTickCount>,
-    sector: Res<Sector>,
     mut log: ResMut<EventLog>,
-    mut scouts: Query<(&mut Ship, &mut Transform, &mut ScoutBehavior)>,
-    mut intel_query: ParamSet<(
-        Query<(&SystemNode, &SystemIntel)>,
-        Query<(&SystemNode, &mut SystemIntel)>,
+    mut scouts: Query<(
+        Entity,
+        &mut Ship,
+        &mut Transform,
+        &mut ScoutBehavior,
+        &mut ZoneId,
     )>,
+    gates: Query<(Entity, &Transform, &JumpGate, &ZoneId), Without<ScoutBehavior>>,
+    mut intel_query: Query<(&SystemNode, &mut SystemIntel)>,
 ) {
     let delta_seconds = time.delta_secs();
-    let arrival_radius = 8.0;
-    let speed = 80.0;
 
-    let mut revealed_map = std::collections::HashMap::new();
-    for (node, intel) in intel_query.p0().iter() {
-        revealed_map.insert(node.id, intel.revealed);
-    }
-
-    for (mut ship, mut transform, mut behavior) in scouts.iter_mut() {
+    for (_scout_entity, mut ship, mut transform, mut behavior, mut zone_id) in scouts.iter_mut() {
         if matches!(ship.state, ShipState::Disabled) {
             continue;
         }
 
-        if ticks.tick < behavior.next_decision_tick {
-            ship.state = ShipState::Idle;
-            continue;
-        }
-
-        if behavior.target_node.is_none() {
-            let threshold = risk_threshold(behavior.risk);
-            let target =
-                choose_scout_target(&sector, &revealed_map, behavior.current_node, threshold);
-            behavior.target_node = target;
-            behavior.next_decision_tick = ticks.tick.saturating_add(10);
-
-            if target.is_none() {
+        match behavior.phase {
+            ScoutPhase::Scanning => {
+                // Phase 1: Scan current zone
+                scout_scan_zone(
+                    &mut behavior,
+                    &mut ship,
+                    &zone_id,
+                    &gates,
+                    &mut intel_query,
+                    ticks.tick,
+                    &mut log,
+                );
+            }
+            ScoutPhase::TravelingToGate => {
+                // Phase 2: Travel to gate
+                scout_travel_to_gate(
+                    &mut behavior,
+                    &mut ship,
+                    &mut transform,
+                    &gates,
+                    delta_seconds,
+                );
+            }
+            ScoutPhase::Jumping => {
+                // Phase 3: Process jump transition
+                scout_process_jump(
+                    &mut behavior,
+                    &mut ship,
+                    &mut zone_id,
+                    delta_seconds,
+                    &mut log,
+                );
+            }
+            ScoutPhase::Complete => {
                 ship.state = ShipState::Idle;
-                continue;
             }
         }
+    }
+}
 
-        let target_id = match behavior.target_node {
-            Some(id) => id,
-            None => {
-                ship.state = ShipState::Idle;
-                continue;
+fn scout_scan_zone(
+    behavior: &mut ScoutBehavior,
+    ship: &mut Ship,
+    zone_id: &ZoneId,
+    gates: &Query<(Entity, &Transform, &JumpGate, &ZoneId), Without<ScoutBehavior>>,
+    intel_query: &mut Query<(&SystemNode, &mut SystemIntel)>,
+    tick: u64,
+    log: &mut EventLog,
+) {
+    // Mark current zone as visited
+    behavior.mark_zone_visited(zone_id.0);
+
+    // Reveal intel for current zone
+    for (node, mut intel) in intel_query.iter_mut() {
+        if node.id == zone_id.0 && !intel.revealed {
+            intel.revealed = true;
+            intel.confidence = 0.8;
+            intel.last_seen_tick = tick;
+            intel.revealed_tick = tick;
+            if matches!(intel.layer, KnowledgeLayer::Existence) {
+                intel.layer = KnowledgeLayer::Geography;
             }
-        };
+            log.push(format!("Scout reported zone {}", zone_id.0));
+        }
+    }
 
-        let target_pos = match find_node_position(&sector.nodes, target_id) {
-            Some(position) => position,
-            None => {
-                behavior.target_node = None;
-                ship.state = ShipState::Idle;
-                continue;
+    // Discover all gates in current zone
+    for (gate_entity, _gate_transform, gate, gate_zone) in gates.iter() {
+        if gate_zone.0 == zone_id.0 {
+            behavior.discover_gate(gate_entity, gate.destination_zone);
+        }
+    }
+
+    // Decide next action
+    if let Some((gate_entity, _dest_zone)) = behavior.next_gate_to_explore() {
+        // Find the gate's position
+        for (entity, gate_transform, _gate, _gate_zone) in gates.iter() {
+            if entity == gate_entity {
+                behavior.target_gate = Some(gate_entity);
+                behavior.target_position = Some(Vec2::new(
+                    gate_transform.translation.x,
+                    gate_transform.translation.y,
+                ));
+                behavior.phase = ScoutPhase::TravelingToGate;
+                ship.state = ShipState::InTransit;
+                return;
             }
-        };
+        }
+    }
 
-        let current_pos = Vec2::new(transform.translation.x, transform.translation.y);
-        let to_target = target_pos - current_pos;
-        let distance = to_target.length();
+    // No more gates to explore - exploration complete
+    behavior.phase = ScoutPhase::Complete;
+    ship.state = ShipState::Idle;
+}
 
-        if distance <= arrival_radius {
-            let route_risk =
-                route_risk_between(&sector, behavior.current_node, target_id).unwrap_or(1.0);
-            let confidence = scout_confidence(behavior.risk, route_risk);
+fn scout_travel_to_gate(
+    behavior: &mut ScoutBehavior,
+    ship: &mut Ship,
+    transform: &mut Transform,
+    gates: &Query<(Entity, &Transform, &JumpGate, &ZoneId), Without<ScoutBehavior>>,
+    delta_seconds: f32,
+) {
+    let target_pos = match behavior.target_position {
+        Some(pos) => pos,
+        None => {
+            // Lost target, go back to scanning
+            behavior.phase = ScoutPhase::Scanning;
+            behavior.target_gate = None;
+            return;
+        }
+    };
 
-            for (node, mut intel) in intel_query.p1().iter_mut() {
-                if node.id == target_id {
-                    let was_revealed = intel.revealed;
-                    intel.revealed = true;
-                    intel.confidence = confidence;
-                    intel.last_seen_tick = ticks.tick;
-                    if !was_revealed {
-                        intel.revealed_tick = ticks.tick;
-                    }
-                    if matches!(intel.layer, KnowledgeLayer::Existence) {
-                        intel.layer = KnowledgeLayer::Geography;
-                    }
-                    break;
+    let current_pos = Vec2::new(transform.translation.x, transform.translation.y);
+    let to_target = target_pos - current_pos;
+    let distance = to_target.length();
+
+    if distance <= SCOUT_GATE_RANGE {
+        // Arrived at gate - start jump
+        if let Some(target_gate) = behavior.target_gate {
+            for (entity, _gate_transform, gate, _gate_zone) in gates.iter() {
+                if entity == target_gate {
+                    behavior.start_jump(gate.destination_zone, JUMP_TRANSITION_SECONDS);
+                    behavior.remove_gate(target_gate);
+                    ship.state = ShipState::Executing;
+                    return;
                 }
             }
-
-            behavior.current_node = target_id;
-            behavior.target_node = None;
-            behavior.next_decision_tick = ticks.tick.saturating_add(20);
-            ship.state = ShipState::Executing;
-            log.push(format!("Scout reported node {}", target_id));
-        } else {
-            let direction = to_target.normalize_or_zero();
-            let step = direction * speed * delta_seconds;
-            transform.translation.x += step.x;
-            transform.translation.y += step.y;
-            ship.state = ShipState::InTransit;
         }
+        // Gate not found, go back to scanning
+        behavior.phase = ScoutPhase::Scanning;
+        behavior.target_gate = None;
+        behavior.target_position = None;
+    } else {
+        // Move toward gate
+        let direction = to_target.normalize_or_zero();
+        let step = direction * SCOUT_SPEED * delta_seconds;
+        transform.translation.x += step.x;
+        transform.translation.y += step.y;
+        ship.state = ShipState::InTransit;
+    }
+}
+
+fn scout_process_jump(
+    behavior: &mut ScoutBehavior,
+    ship: &mut Ship,
+    zone_id: &mut ZoneId,
+    delta_seconds: f32,
+    log: &mut EventLog,
+) {
+    behavior.jump_remaining_seconds -= delta_seconds;
+
+    if behavior.jump_remaining_seconds <= 0.0 {
+        let destination = behavior.jump_destination.unwrap_or(behavior.current_zone);
+        behavior.complete_jump();
+        // Update the actual ZoneId component
+        zone_id.0 = behavior.current_zone;
+        ship.state = ShipState::Executing;
+        log.push(format!("Scout arrived at zone {}", destination));
+    } else {
+        ship.state = ShipState::InTransit;
     }
 }
 
@@ -744,6 +832,7 @@ fn spawn_ore_at_revealed_nodes(
                         capacity,
                         rate_per_second: 3.0,
                     },
+                    ZoneId(node.id),
                     Name::new(format!("{}-{}-{}", kind_str, node.id, index + 1)),
                     SpatialBundle::from_transform(Transform::from_xyz(
                         node.position.x + offset_x,
@@ -792,64 +881,11 @@ fn check_boundary_warnings(
     }
 }
 
-fn route_risk_between(sector: &Sector, from: u32, to: u32) -> Option<f32> {
-    for route in &sector.routes {
-        if (route.from == from && route.to == to) || (route.from == to && route.to == from) {
-            return Some(route.risk);
-        }
-    }
-    None
-}
-
-fn choose_scout_target(
-    sector: &Sector,
-    revealed_map: &std::collections::HashMap<u32, bool>,
-    current_node: u32,
-    threshold: f32,
-) -> Option<u32> {
-    let mut candidates = sector
-        .nodes
-        .iter()
-        .filter_map(|node| {
-            let revealed = match revealed_map.get(&node.id) {
-                Some(revealed) => *revealed,
-                None => false,
-            };
-            if revealed {
-                None
-            } else {
-                Some(node.id)
-            }
-        })
-        .collect::<Vec<_>>();
-
-    candidates.sort_unstable();
-
-    for node_id in candidates {
-        let risk = route_risk_between(sector, current_node, node_id).unwrap_or(1.0);
-        if risk <= threshold {
-            return Some(node_id);
-        }
-    }
-
-    None
-}
-
-fn find_node_position(nodes: &[SystemNode], id: u32) -> Option<Vec2> {
-    for node in nodes {
-        if node.id == id {
-            return Some(node.position);
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ships::ShipKind;
     use crate::stations::StationKind;
-    use crate::world::RouteEdge;
     use bevy::ecs::system::SystemState;
     use std::time::Duration;
 
@@ -1003,53 +1039,6 @@ mod tests {
         for station in query.iter(&world) {
             assert_eq!(station.state, StationState::Failed);
         }
-    }
-
-    #[test]
-    fn route_risk_between_matches_edge() {
-        let sector = Sector {
-            nodes: vec![],
-            routes: vec![RouteEdge {
-                from: 1,
-                to: 2,
-                distance: 10.0,
-                risk: 0.42,
-            }],
-        };
-
-        let risk = route_risk_between(&sector, 2, 1);
-        assert_eq!(risk, Some(0.42));
-    }
-
-    #[test]
-    fn choose_scout_target_skips_revealed_nodes() {
-        let sector = Sector {
-            nodes: vec![
-                SystemNode {
-                    id: 1,
-                    position: Vec2::ZERO,
-                    modifier: None,
-                },
-                SystemNode {
-                    id: 2,
-                    position: Vec2::new(10.0, 0.0),
-                    modifier: None,
-                },
-            ],
-            routes: vec![RouteEdge {
-                from: 1,
-                to: 2,
-                distance: 10.0,
-                risk: 0.2,
-            }],
-        };
-
-        let mut revealed = std::collections::HashMap::new();
-        revealed.insert(1, true);
-        revealed.insert(2, false);
-
-        let target = choose_scout_target(&sector, &revealed, 1, 0.5);
-        assert_eq!(target, Some(2));
     }
 
     #[test]

@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::compat::SpatialBundle;
 
 use crate::fleets::{RiskTolerance, ScoutBehavior};
-use crate::pirates::PirateBase;
+use crate::pirates::{PirateBase, PirateShip};
 use crate::plugins::core::{DebugWindow, EventLog, GameState, InputBindings};
 use crate::plugins::player::PlayerControl;
 use crate::plugins::sim::{BoundaryWarningState, SimTickCount};
@@ -15,7 +15,9 @@ use crate::stations::{
     station_build_time_seconds, station_fuel_capacity, Station, StationBuild, StationCrisisLog,
     StationKind, StationState,
 };
-use crate::world::{KnowledgeLayer, RouteEdge, Sector, SystemIntel, SystemNode, ZoneModifier};
+use crate::world::{
+    JumpGate, KnowledgeLayer, RouteEdge, Sector, SystemIntel, SystemNode, ZoneId, ZoneModifier,
+};
 
 pub struct WorldGenPlugin;
 
@@ -74,7 +76,12 @@ fn apply_seed_world(commands: &mut Commands, sector: &mut Sector, seed: u64) {
 
     for index in 0..node_count {
         let node_id = seed_to_node_id(seed.wrapping_add(index as u64 + 1));
-        let position = next_position(&mut rng);
+        // First node spawns near origin so player starts in safe zone
+        let position = if index == 0 {
+            next_starting_position(&mut rng)
+        } else {
+            next_position(&mut rng)
+        };
         let modifier = pick_modifier(&mut rng);
         let node = SystemNode {
             id: node_id,
@@ -116,7 +123,10 @@ fn apply_seed_world(commands: &mut Commands, sector: &mut Sector, seed: u64) {
         });
     }
 
-    sector.nodes = nodes;
+    sector.nodes = nodes.clone();
+
+    // Spawn jump gates for each route (one at each end)
+    spawn_jump_gates(commands, &nodes, &sector.routes);
 
     spawn_starting_entities(commands, sector);
     spawn_pirate_base(commands, sector);
@@ -266,6 +276,7 @@ fn handle_debug_spawns(
                 remaining_seconds: build_time,
             },
             StationCrisisLog::default(),
+            ZoneId(node.id),
             Name::new(format!("Station-Spawned-{}", node.id)),
             SpatialBundle::from_transform(Transform::from_xyz(
                 node.position.x + 40.0,
@@ -277,6 +288,10 @@ fn handle_debug_spawns(
 
     if input.just_pressed(bindings.spawn_ship) {
         spawn_ship_stub(&mut commands, node);
+    }
+
+    if input.just_pressed(bindings.spawn_pirate) {
+        spawn_pirate(&mut commands, node);
     }
 }
 
@@ -355,7 +370,10 @@ fn spawn_player_ship(commands: &mut Commands, node: &SystemNode) {
     let x = node.position.x - 8.0;
     let y = node.position.y - 24.0;
 
-    info!("Spawning player ship at ({:.1}, {:.1}, 0.4)", x, y);
+    info!(
+        "Spawning player ship at ({:.1}, {:.1}, 0.4) in zone {}",
+        x, y, node.id
+    );
 
     commands.spawn((
         Ship {
@@ -372,6 +390,7 @@ fn spawn_player_ship(commands: &mut Commands, node: &SystemNode) {
         PlayerControl,
         ShipFuelAlert::default(),
         BoundaryWarningState::default(),
+        ZoneId(node.id),
         Name::new("Ship-Player"),
         SpatialBundle::from_transform(Transform::from_xyz(x, y, 0.4)),
     ));
@@ -394,17 +413,26 @@ fn spawn_ship_stub(commands: &mut Commands, node: &SystemNode) {
         Fleet {
             role: ship_default_role(ShipKind::Scout),
         },
-        ScoutBehavior {
-            risk: RiskTolerance::Balanced,
-            current_node: node.id,
-            target_node: None,
-            next_decision_tick: 0,
-        },
+        ScoutBehavior::new(node.id, RiskTolerance::Balanced),
         ShipFuelAlert::default(),
+        ZoneId(node.id),
         Name::new("Ship-Scout"),
         SpatialBundle::from_transform(Transform::from_xyz(
             node.position.x - 24.0,
             node.position.y - 10.0,
+            0.4,
+        )),
+    ));
+}
+
+fn spawn_pirate(commands: &mut Commands, node: &SystemNode) {
+    commands.spawn((
+        PirateShip { speed: 70.0 },
+        ZoneId(node.id),
+        Name::new("Pirate-Ship"),
+        SpatialBundle::from_transform(Transform::from_xyz(
+            node.position.x + 24.0,
+            node.position.y + 10.0,
             0.4,
         )),
     ));
@@ -423,6 +451,7 @@ fn spawn_pirate_base(commands: &mut Commands, sector: &Sector) {
             launch_interval_ticks: 300,
             next_launch_tick: 120,
         },
+        ZoneId(target.id),
         Name::new("Pirate-Base"),
         SpatialBundle::from_transform(Transform::from_xyz(
             target.position.x + 50.0,
@@ -430,6 +459,55 @@ fn spawn_pirate_base(commands: &mut Commands, sector: &Sector) {
             0.45,
         )),
     ));
+}
+
+/// Distance from node center to place gate
+const GATE_OFFSET: f32 = 60.0;
+
+fn spawn_jump_gates(commands: &mut Commands, nodes: &[SystemNode], routes: &[RouteEdge]) {
+    // Create a map of node id -> node for quick lookup
+    let node_map: std::collections::HashMap<u32, &SystemNode> =
+        nodes.iter().map(|n| (n.id, n)).collect();
+
+    for route in routes {
+        let Some(from_node) = node_map.get(&route.from) else {
+            continue;
+        };
+        let Some(to_node) = node_map.get(&route.to) else {
+            continue;
+        };
+
+        // Calculate direction from source to destination
+        let direction = (to_node.position - from_node.position).normalize_or_zero();
+
+        // Spawn gate at source node (pointing to destination)
+        let from_gate_pos = from_node.position + direction * GATE_OFFSET;
+        commands.spawn((
+            JumpGate {
+                source_zone: route.from,
+                destination_zone: route.to,
+            },
+            ZoneId(route.from),
+            Name::new(format!("JumpGate-{}-to-{}", route.from, route.to)),
+            SpatialBundle::from_transform(Transform::from_xyz(
+                from_gate_pos.x,
+                from_gate_pos.y,
+                0.3,
+            )),
+        ));
+
+        // Spawn gate at destination node (pointing back to source)
+        let to_gate_pos = to_node.position - direction * GATE_OFFSET;
+        commands.spawn((
+            JumpGate {
+                source_zone: route.to,
+                destination_zone: route.from,
+            },
+            ZoneId(route.to),
+            Name::new(format!("JumpGate-{}-to-{}", route.to, route.from)),
+            SpatialBundle::from_transform(Transform::from_xyz(to_gate_pos.x, to_gate_pos.y, 0.3)),
+        ));
+    }
 }
 
 fn seed_to_node_id(seed: u64) -> u32 {
@@ -467,6 +545,18 @@ fn next_position(state: &mut u64) -> Vec2 {
     Vec2::new(
         scale_to_range(x, -1500.0, 1500.0),
         scale_to_range(y, -1000.0, 1000.0),
+    )
+}
+
+/// Generate a position near origin for the starting node
+/// Keeps player spawn well within safe boundaries (warning at 1200)
+fn next_starting_position(state: &mut u64) -> Vec2 {
+    let x = next_unit(state);
+    let y = next_unit(state);
+
+    Vec2::new(
+        scale_to_range(x, -400.0, 400.0),
+        scale_to_range(y, -300.0, 300.0),
     )
 }
 
@@ -533,5 +623,27 @@ mod tests {
 
         assert_eq!(sector.nodes.len(), 5);
         assert_eq!(sector.routes.len(), 5);
+    }
+
+    #[test]
+    fn spawn_pirate_creates_pirate_ship_entity() {
+        let mut world = World::default();
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+
+        let node = SystemNode {
+            id: 1,
+            position: Vec2::new(100.0, 200.0),
+            modifier: None,
+        };
+
+        spawn_pirate(&mut commands, &node);
+        queue.apply(&mut world);
+
+        // Verify a PirateShip entity was created
+        let mut query = world.query::<&PirateShip>();
+        let pirates: Vec<_> = query.iter(&world).collect();
+        assert_eq!(pirates.len(), 1);
+        assert_eq!(pirates[0].speed, 70.0);
     }
 }

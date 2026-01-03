@@ -8,7 +8,7 @@ use bevy::render::sync_world::SyncToRenderWorld;
 use bevy::sprite::{Anchor, Sprite, Text2d};
 use bevy::text::{Font, TextBounds, TextColor, TextFont, TextLayout};
 use bevy::ui::widget::TextNodeFlags;
-use bevy::ui::{BackgroundColor, ContentSize, FocusPolicy, Node as UiNode};
+use bevy::ui::{BackgroundColor, BorderColor, ContentSize, FocusPolicy, Node as UiNode};
 
 #[derive(Clone)]
 pub struct TextStyle {
@@ -81,6 +81,7 @@ pub struct NodeBundle {
     pub view_visibility: ViewVisibility,
     pub z_index: ZIndex,
     pub background_color: BackgroundColor,
+    pub border_color: BorderColor,
 }
 
 #[derive(Bundle, Default)]

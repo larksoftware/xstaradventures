@@ -131,7 +131,6 @@ pub struct InputBindings {
     pub toggle_routes: KeyCode,
     pub toggle_rings: KeyCode,
     pub toggle_grid: KeyCode,
-    pub toggle_backdrop: KeyCode,
     pub toggle_route_labels: KeyCode,
     pub toggle_node_labels: KeyCode,
     pub refresh_intel: KeyCode,
@@ -141,6 +140,7 @@ pub struct InputBindings {
     pub reveal_adjacent: KeyCode,
     pub spawn_station: KeyCode,
     pub spawn_ship: KeyCode,
+    pub spawn_pirate: KeyCode,
     pub reveal_all: KeyCode,
     pub clear_reveal: KeyCode,
     pub map_zoom: KeyCode,
@@ -157,7 +157,7 @@ impl Default for InputBindings {
             rotate_left: KeyCode::KeyA,
             rotate_right: KeyCode::KeyD,
             brake: KeyCode::Space,
-            interact: KeyCode::KeyF,
+            interact: KeyCode::KeyJ,
             toggle_debug: KeyCode::F3,
             scout_risk_down: KeyCode::Comma,
             scout_risk_up: KeyCode::Period,
@@ -172,7 +172,6 @@ impl Default for InputBindings {
             toggle_routes: KeyCode::KeyR,
             toggle_rings: KeyCode::KeyF,
             toggle_grid: KeyCode::KeyG,
-            toggle_backdrop: KeyCode::KeyP,
             toggle_route_labels: KeyCode::KeyT,
             toggle_node_labels: KeyCode::KeyY,
             refresh_intel: KeyCode::KeyI,
@@ -181,7 +180,8 @@ impl Default for InputBindings {
             toggle_map: KeyCode::KeyM,
             reveal_adjacent: KeyCode::KeyV,
             spawn_station: KeyCode::KeyB,
-            spawn_ship: KeyCode::KeyJ,
+            spawn_ship: KeyCode::KeyS,
+            spawn_pirate: KeyCode::KeyP,
             reveal_all: KeyCode::KeyU,
             clear_reveal: KeyCode::KeyZ,
             map_zoom: KeyCode::KeyC,
@@ -341,14 +341,12 @@ fn handle_view_toggle(
     input: Res<ButtonInput<KeyCode>>,
     bindings: Res<InputBindings>,
     mut view: ResMut<ViewMode>,
-    mut log: ResMut<EventLog>,
 ) {
     if input.just_pressed(bindings.toggle_map) {
         *view = match *view {
             ViewMode::World => ViewMode::Map,
             ViewMode::Map => ViewMode::World,
         };
-        log.push(format!("View: {:?}", view));
     }
 }
 
@@ -416,12 +414,11 @@ mod tests {
     }
 
     #[test]
-    fn handle_view_toggle_updates_view_and_log() {
+    fn handle_view_toggle_updates_view() {
         let mut world = World::default();
         world.insert_resource(ButtonInput::<KeyCode>::default());
         world.insert_resource(InputBindings::default());
         world.insert_resource(ViewMode::World);
-        world.insert_resource(EventLog::default());
 
         {
             let mut input = world.resource_mut::<ButtonInput<KeyCode>>();
@@ -432,19 +429,13 @@ mod tests {
             Res<ButtonInput<KeyCode>>,
             Res<InputBindings>,
             ResMut<ViewMode>,
-            ResMut<EventLog>,
         )> = SystemState::new(&mut world);
-        let (input, bindings, view, log) = system_state.get_mut(&mut world);
-        handle_view_toggle(input, bindings, view, log);
+        let (input, bindings, view) = system_state.get_mut(&mut world);
+        handle_view_toggle(input, bindings, view);
         system_state.apply(&mut world);
 
         let view = world.resource::<ViewMode>();
         assert_eq!(*view, ViewMode::Map);
-        let log = world.resource::<EventLog>();
-        assert_eq!(
-            log.entries().last().map(String::as_str),
-            Some("View: ResMut(Map)")
-        );
     }
 
     #[test]
@@ -502,6 +493,18 @@ mod tests {
         assert_eq!(config.tick_hz, 1.0);
         let fixed_time = world.resource::<Time<Fixed>>();
         assert_eq!(fixed_time.timestep().as_secs_f32(), 1.0);
+    }
+
+    #[test]
+    fn spawn_pirate_binding_is_key_p() {
+        let bindings = InputBindings::default();
+        assert_eq!(bindings.spawn_pirate, KeyCode::KeyP);
+    }
+
+    #[test]
+    fn spawn_ship_binding_is_key_s() {
+        let bindings = InputBindings::default();
+        assert_eq!(bindings.spawn_ship, KeyCode::KeyS);
     }
 }
 

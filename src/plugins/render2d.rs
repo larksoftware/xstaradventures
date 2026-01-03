@@ -170,7 +170,6 @@ pub struct RenderToggles {
     show_routes: bool,
     show_rings: bool,
     show_grid: bool,
-    show_backdrop: bool,
     show_route_labels: bool,
     show_node_labels: bool,
 }
@@ -182,7 +181,6 @@ impl Default for RenderToggles {
             show_routes: true,
             show_rings: true,
             show_grid: true,
-            show_backdrop: true,
             show_route_labels: true,
             show_node_labels: true,
         }
@@ -1108,7 +1106,11 @@ fn draw_tactical_navigation(
     };
 
     // Always draw targeting reticle on the target itself
-    let reticle_size = if targets.manually_selected { 18.0 } else { 14.0 };
+    let reticle_size = if targets.manually_selected {
+        18.0
+    } else {
+        14.0
+    };
     let inner_gap = reticle_size * 0.4;
     // Draw crosshair lines with gap in center
     gizmos.line_2d(
@@ -1772,12 +1774,6 @@ fn handle_render_toggles(
         toggles.show_grid = !toggles.show_grid;
         updated = true;
         info!("Render grid: {}", toggles.show_grid);
-    }
-
-    if input.just_pressed(bindings.toggle_backdrop) {
-        toggles.show_backdrop = !toggles.show_backdrop;
-        updated = true;
-        info!("Render backdrop: {}", toggles.show_backdrop);
     }
 
     if input.just_pressed(bindings.toggle_route_labels) {
