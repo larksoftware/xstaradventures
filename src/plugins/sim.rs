@@ -13,7 +13,9 @@ use crate::stations::{
     station_fuel_burn_per_minute, station_ore_production_per_minute, CrisisStage, CrisisType,
     Station, StationBuild, StationCrisis, StationCrisisLog, StationProduction, StationState,
 };
-use crate::world::{zone_modifier_effect, KnowledgeLayer, Sector, SystemIntel, SystemNode, ZoneModifier};
+use crate::world::{
+    zone_modifier_effect, KnowledgeLayer, Sector, SystemIntel, SystemNode, ZoneModifier,
+};
 
 pub struct SimPlugin;
 
@@ -716,7 +718,8 @@ fn spawn_ore_at_revealed_nodes(
 
             for index in 0..ore_count {
                 let angle = next_unit_ore_rng(&mut rng_state) * std::f32::consts::TAU;
-                let radius = ORE_MIN_RADIUS + next_unit_ore_rng(&mut rng_state) * (ORE_MAX_RADIUS - ORE_MIN_RADIUS);
+                let radius = ORE_MIN_RADIUS
+                    + next_unit_ore_rng(&mut rng_state) * (ORE_MAX_RADIUS - ORE_MIN_RADIUS);
 
                 let offset_x = angle.cos() * radius;
                 let offset_y = angle.sin() * radius;

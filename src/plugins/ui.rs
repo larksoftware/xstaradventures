@@ -55,10 +55,7 @@ impl Plugin for UIPlugin {
                 )
                     .run_if(view_is_map),
             )
-            .add_systems(
-                Update,
-                update_tactical_panel.run_if(view_is_world),
-            )
+            .add_systems(Update, update_tactical_panel.run_if(view_is_world))
             .init_resource::<HoveredNode>();
     }
 }
@@ -1116,72 +1113,71 @@ fn update_debug_panel(
             // Update the text in the child
             for child in children.iter() {
                 if let Ok(mut text) = text_query.get_mut(child) {
+                    let mut body = String::from("=== DEBUG PANEL (F3 to close) ===\n\n");
 
-            let mut body = String::from("=== DEBUG PANEL (F3 to close) ===\n\n");
+                    body.push_str(&format!("Seed: {} | Tick: {}\n", seed.value, ticks.tick));
+                    body.push_str(&format!(
+                        "Rate: {:.0} Hz | Paused: {}\n",
+                        config.tick_hz, config.paused
+                    ));
+                    body.push_str(&format!("State: {:?}\n\n", state.get()));
 
-            body.push_str(&format!("Seed: {} | Tick: {}\n", seed.value, ticks.tick));
-            body.push_str(&format!(
-                "Rate: {:.0} Hz | Paused: {}\n",
-                config.tick_hz, config.paused
-            ));
-            body.push_str(&format!("State: {:?}\n\n", state.get()));
+                    body.push_str("Render Toggles:\n");
+                    body.push_str(&format!(
+                        "  Rings: {} | Grid: {}\n",
+                        if toggles.rings_enabled() { "On" } else { "Off" },
+                        if toggles.grid_enabled() { "On" } else { "Off" }
+                    ));
+                    body.push_str(&format!(
+                        "  Route Labels: {} | Node Labels: {}\n",
+                        if toggles.route_labels_enabled() {
+                            "On"
+                        } else {
+                            "Off"
+                        },
+                        if toggles.node_labels_enabled() {
+                            "On"
+                        } else {
+                            "Off"
+                        }
+                    ));
+                    body.push_str(&format!("  Zoom: {}\n\n", zoom.label()));
 
-            body.push_str("Render Toggles:\n");
-            body.push_str(&format!(
-                "  Rings: {} | Grid: {}\n",
-                if toggles.rings_enabled() { "On" } else { "Off" },
-                if toggles.grid_enabled() { "On" } else { "Off" }
-            ));
-            body.push_str(&format!(
-                "  Route Labels: {} | Node Labels: {}\n",
-                if toggles.route_labels_enabled() {
-                    "On"
-                } else {
-                    "Off"
-                },
-                if toggles.node_labels_enabled() {
-                    "On"
-                } else {
-                    "Off"
-                }
-            ));
-            body.push_str(&format!("  Zoom: {}\n\n", zoom.label()));
+                    body.push_str(&format!("Stations: {}\n", stations.iter().count()));
+                    body.push_str(&format!("Ships: {}\n", ships.iter().count()));
+                    body.push_str(&format!("Scouts: {}\n\n", scouts.iter().count()));
 
-            body.push_str(&format!("Stations: {}\n", stations.iter().count()));
-            body.push_str(&format!("Ships: {}\n", ships.iter().count()));
-            body.push_str(&format!("Scouts: {}\n\n", scouts.iter().count()));
+                    body.push_str(&format!(
+                        "Intel Refresh CD: {} ticks\n",
+                        cooldown.remaining_ticks(ticks.tick)
+                    ));
 
-            body.push_str(&format!(
-                "Intel Refresh CD: {} ticks\n",
-                cooldown.remaining_ticks(ticks.tick)
-            ));
+                    match marker.node_id() {
+                        Some(node_id) => {
+                            body.push_str(&format!("Focus: node {}\n", node_id));
+                        }
+                        None => {
+                            body.push_str("Focus: --\n");
+                        }
+                    }
 
-            match marker.node_id() {
-                Some(node_id) => {
-                    body.push_str(&format!("Focus: node {}\n", node_id));
-                }
-                None => {
-                    body.push_str("Focus: --\n");
-                }
-            }
+                    let revealed_count = nodes.iter().filter(|(_, intel)| intel.revealed).count();
+                    body.push_str(&format!(
+                        "\nNodes: {} revealed / {} total\n",
+                        revealed_count,
+                        nodes.iter().count()
+                    ));
 
-            let revealed_count = nodes.iter().filter(|(_, intel)| intel.revealed).count();
-            body.push_str(&format!(
-                "\nNodes: {} revealed / {} total\n",
-                revealed_count,
-                nodes.iter().count()
-            ));
-
-            body.push_str("\nDebug Keybinds:\n");
-            body.push_str("  -/= : change seed\n");
-            body.push_str("  V   : reveal adjacent\n");
-            body.push_str("  U   : reveal all\n");
-            body.push_str("  Z   : clear reveals\n");
-            body.push_str("  B   : spawn station\n");
-            body.push_str("  J   : spawn scout\n");
-            body.push_str("  I   : refresh intel\n");
-            body.push_str("  O   : advance intel\n");
-            body.push_str("  K   : randomize modifiers\n");
+                    body.push_str("\nDebug Keybinds:\n");
+                    body.push_str("  -/= : change seed\n");
+                    body.push_str("  V   : reveal adjacent\n");
+                    body.push_str("  U   : reveal all\n");
+                    body.push_str("  Z   : clear reveals\n");
+                    body.push_str("  B   : spawn station\n");
+                    body.push_str("  J   : spawn scout\n");
+                    body.push_str("  I   : refresh intel\n");
+                    body.push_str("  O   : advance intel\n");
+                    body.push_str("  K   : randomize modifiers\n");
 
                     text.0 = body;
                     break;

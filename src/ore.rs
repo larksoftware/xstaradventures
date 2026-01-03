@@ -1,15 +1,10 @@
 use bevy::prelude::*;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default)]
 pub enum OreKind {
+    #[default]
     CommonOre,
     FuelOre,
-}
-
-impl Default for OreKind {
-    fn default() -> Self {
-        OreKind::CommonOre
-    }
 }
 
 #[derive(Component, Debug, Clone, Copy)]

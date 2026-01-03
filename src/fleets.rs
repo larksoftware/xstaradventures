@@ -1,16 +1,11 @@
 use bevy::prelude::*;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default)]
 pub enum RiskTolerance {
     Cautious,
+    #[default]
     Balanced,
     Bold,
-}
-
-impl Default for RiskTolerance {
-    fn default() -> Self {
-        RiskTolerance::Balanced
-    }
 }
 
 #[derive(Component, Debug)]

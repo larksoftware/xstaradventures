@@ -8,7 +8,9 @@ pub enum ShipKind {
     Security,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum FleetRole {
     Scout,
     Mining,

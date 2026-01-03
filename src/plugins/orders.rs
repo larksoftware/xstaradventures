@@ -66,7 +66,7 @@ fn apply_orders(mut queue: ResMut<OrderQueue>, mut applied: MessageWriter<OrderA
 }
 
 fn emit_sample_command(ticks: Res<SimTickCount>, mut commands: MessageWriter<CommandEvent>) {
-    if ticks.tick % 30 == 0 {
+    if ticks.tick.is_multiple_of(30) {
         commands.write(CommandEvent {
             kind: CommandKind::Noop,
         });

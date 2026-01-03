@@ -44,6 +44,11 @@ fn debug_window_open(debug_window: Res<DebugWindow>) -> bool {
     debug_window.open
 }
 
+/// Check if either Shift key is pressed (for debug key modifiers)
+fn shift_pressed(input: &ButtonInput<KeyCode>) -> bool {
+    input.pressed(KeyCode::ShiftLeft) || input.pressed(KeyCode::ShiftRight)
+}
+
 #[derive(Resource)]
 pub struct WorldSeed {
     pub value: u64,
@@ -128,6 +133,10 @@ fn handle_seed_input(
     stations: Query<Entity, With<Station>>,
     ships: Query<Entity, With<Ship>>,
 ) {
+    if !shift_pressed(&input) {
+        return;
+    }
+
     let mut updated = false;
 
     if input.just_pressed(bindings.seed_up) {
@@ -163,7 +172,7 @@ fn handle_modifier_randomize(
     mut sector: ResMut<Sector>,
     mut nodes: Query<&mut SystemNode>,
 ) {
-    if !input.just_pressed(bindings.randomize_modifiers) {
+    if !shift_pressed(&input) || !input.just_pressed(bindings.randomize_modifiers) {
         return;
     }
 
@@ -186,7 +195,7 @@ fn handle_reveal_adjacent(
     mut nodes: Query<(&SystemNode, &mut SystemIntel)>,
     mut log: ResMut<EventLog>,
 ) {
-    if !input.just_pressed(bindings.reveal_adjacent) {
+    if !shift_pressed(&input) || !input.just_pressed(bindings.reveal_adjacent) {
         return;
     }
 
@@ -222,6 +231,10 @@ fn handle_debug_spawns(
     mut commands: Commands,
     nodes: Query<(&SystemNode, &SystemIntel)>,
 ) {
+    if !shift_pressed(&input) {
+        return;
+    }
+
     let mut target_node = None;
     for (node, intel) in nodes.iter() {
         if intel.revealed {
@@ -274,7 +287,7 @@ fn handle_reveal_all(
     mut nodes: Query<&mut SystemIntel>,
     mut log: ResMut<EventLog>,
 ) {
-    if !input.just_pressed(bindings.reveal_all) {
+    if !shift_pressed(&input) || !input.just_pressed(bindings.reveal_all) {
         return;
     }
 
@@ -296,7 +309,7 @@ fn handle_clear_reveal(
     mut nodes: Query<&mut SystemIntel>,
     mut log: ResMut<EventLog>,
 ) {
-    if !input.just_pressed(bindings.clear_reveal) {
+    if !shift_pressed(&input) || !input.just_pressed(bindings.clear_reveal) {
         return;
     }
 

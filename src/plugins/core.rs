@@ -80,16 +80,11 @@ impl EventLog {
     }
 }
 
-#[derive(Resource, Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Resource, Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub enum ViewMode {
+    #[default]
     World,
     Map,
-}
-
-impl Default for ViewMode {
-    fn default() -> Self {
-        Self::World
-    }
 }
 
 #[derive(Resource, Debug, Default)]
@@ -120,6 +115,7 @@ pub struct InputBindings {
     pub move_down: KeyCode,
     pub rotate_left: KeyCode,
     pub rotate_right: KeyCode,
+    pub brake: KeyCode,
     pub interact: KeyCode,
     pub toggle_debug: KeyCode,
     pub scout_risk_down: KeyCode,
@@ -150,6 +146,7 @@ pub struct InputBindings {
     pub map_zoom: KeyCode,
     pub center_camera: KeyCode,
     pub cycle_target: KeyCode,
+    pub navigate: KeyCode,
 }
 
 impl Default for InputBindings {
@@ -159,11 +156,12 @@ impl Default for InputBindings {
             move_down: KeyCode::KeyS,
             rotate_left: KeyCode::KeyA,
             rotate_right: KeyCode::KeyD,
+            brake: KeyCode::Space,
             interact: KeyCode::KeyF,
             toggle_debug: KeyCode::F3,
             scout_risk_down: KeyCode::Comma,
             scout_risk_up: KeyCode::Period,
-            pause: KeyCode::Space,
+            pause: KeyCode::Escape,
             rate_up: KeyCode::BracketRight,
             rate_down: KeyCode::BracketLeft,
             save: KeyCode::F5,
@@ -189,6 +187,7 @@ impl Default for InputBindings {
             map_zoom: KeyCode::KeyC,
             center_camera: KeyCode::KeyH,
             cycle_target: KeyCode::Tab,
+            navigate: KeyCode::KeyN,
         }
     }
 }
@@ -360,7 +359,10 @@ fn handle_debug_toggle(
 ) {
     if input.just_pressed(bindings.toggle_debug) {
         debug_window.open = !debug_window.open;
-        info!("Debug window: {}", if debug_window.open { "open" } else { "closed" });
+        info!(
+            "Debug window: {}",
+            if debug_window.open { "open" } else { "closed" }
+        );
     }
 }
 
@@ -454,7 +456,7 @@ mod tests {
 
         {
             let mut input = world.resource_mut::<ButtonInput<KeyCode>>();
-            input.press(KeyCode::Space);
+            input.press(KeyCode::Escape);
         }
 
         let mut system_state: SystemState<(

@@ -18,6 +18,22 @@ use crate::world::{KnowledgeLayer, Sector, SystemIntel, SystemNode, ZoneModifier
 use bevy::image::Image;
 use bevy::window::PrimaryWindow;
 
+// Type aliases for complex query filter combinations (filters only, not full queries)
+type StationSpawnFilter = (With<Station>, Without<StationVisual>);
+type OreSpawnFilter = (With<OreNode>, Without<OreVisual>);
+type PirateBaseSpawnFilter = (With<PirateBase>, Without<PirateBaseVisual>);
+type PirateShipSpawnFilter = (With<PirateShip>, Without<PirateShipVisual>);
+type ShipSpawnFilter = (
+    Without<ShipVisual>,
+    Without<ShipVisualMarker>,
+    Without<Sprite>,
+);
+
+/// Check if either Shift key is pressed (for debug key modifiers)
+fn shift_pressed(input: &ButtonInput<KeyCode>) -> bool {
+    input.pressed(KeyCode::ShiftLeft) || input.pressed(KeyCode::ShiftRight)
+}
+
 #[derive(Component)]
 struct Starfield {
     #[allow(dead_code)]
@@ -130,19 +146,10 @@ impl Plugin for Render2DPlugin {
 const MAP_EXTENT_X: f32 = 600.0;
 const MAP_EXTENT_Y: f32 = 360.0;
 
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub struct MapZoomOverride {
     enabled: bool,
     index: usize,
-}
-
-impl Default for MapZoomOverride {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            index: 0,
-        }
-    }
 }
 
 impl MapZoomOverride {
@@ -471,7 +478,7 @@ fn handle_map_zoom(
     bindings: Res<InputBindings>,
     mut zoom: ResMut<MapZoomOverride>,
 ) {
-    if !input.just_pressed(bindings.map_zoom) {
+    if !shift_pressed(&input) || !input.just_pressed(bindings.map_zoom) {
         return;
     }
 
@@ -550,7 +557,7 @@ fn sync_node_visuals(
 
 fn spawn_station_visuals(
     mut commands: Commands,
-    stations: Query<(Entity, &Transform), (With<Station>, Without<StationVisual>)>,
+    stations: Query<(Entity, &Transform), StationSpawnFilter>,
 ) {
     for (entity, transform) in stations.iter() {
         let sprite = SpriteBundle {
@@ -567,6 +574,7 @@ fn spawn_station_visuals(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn sync_station_visuals(
     mut commands: Commands,
     mut params: ParamSet<(
@@ -596,10 +604,7 @@ fn sync_station_visuals(
     }
 }
 
-fn spawn_ore_visuals(
-    mut commands: Commands,
-    ores: Query<(Entity, &Transform), (With<OreNode>, Without<OreVisual>)>,
-) {
+fn spawn_ore_visuals(mut commands: Commands, ores: Query<(Entity, &Transform), OreSpawnFilter>) {
     for (entity, transform) in ores.iter() {
         let sprite = SpriteBundle {
             sprite: Sprite {
@@ -615,6 +620,7 @@ fn spawn_ore_visuals(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn sync_ore_visuals(
     mut commands: Commands,
     mut params: ParamSet<(
@@ -674,7 +680,7 @@ fn update_ore_visuals(
 
 fn spawn_pirate_base_visuals(
     mut commands: Commands,
-    bases: Query<(Entity, &Transform), (With<PirateBase>, Without<PirateBaseVisual>)>,
+    bases: Query<(Entity, &Transform), PirateBaseSpawnFilter>,
 ) {
     for (entity, transform) in bases.iter() {
         let sprite = SpriteBundle {
@@ -691,6 +697,7 @@ fn spawn_pirate_base_visuals(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn sync_pirate_base_visuals(
     mut commands: Commands,
     mut params: ParamSet<(
@@ -719,7 +726,7 @@ fn sync_pirate_base_visuals(
 
 fn spawn_pirate_ship_visuals(
     mut commands: Commands,
-    ships: Query<(Entity, &Transform), (With<PirateShip>, Without<PirateShipVisual>)>,
+    ships: Query<(Entity, &Transform), PirateShipSpawnFilter>,
 ) {
     for (entity, transform) in ships.iter() {
         let sprite = SpriteBundle {
@@ -736,6 +743,7 @@ fn spawn_pirate_ship_visuals(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn sync_pirate_ship_visuals(
     mut commands: Commands,
     mut params: ParamSet<(
@@ -764,14 +772,7 @@ fn sync_pirate_ship_visuals(
 
 fn spawn_ship_visuals(
     mut commands: Commands,
-    ships: Query<
-        (Entity, &Transform, &Ship),
-        (
-            Without<ShipVisual>,
-            Without<ShipVisualMarker>,
-            Without<Sprite>,
-        ),
-    >,
+    ships: Query<(Entity, &Transform, &Ship), ShipSpawnFilter>,
     player_texture: Res<PlayerShipTexture>,
     asset_server: Res<AssetServer>,
 ) {
@@ -836,6 +837,7 @@ fn spawn_ship_visuals(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn sync_ship_visuals(
     mut commands: Commands,
     mut params: ParamSet<(
@@ -939,6 +941,7 @@ fn update_ship_labels(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn debug_player_components(
     player: Query<
         (
@@ -1020,8 +1023,15 @@ fn center_camera_on_revealed(
         }
         marker.position = Some(target);
         marker.node_id = Some(node_id);
-        let beacon_status = if beacon.enabled { " | Beacon ON" } else { " | Beacon OFF" };
-        log.push(format!("World camera centered on node {}{}", node_id, beacon_status));
+        let beacon_status = if beacon.enabled {
+            " | Beacon ON"
+        } else {
+            " | Beacon OFF"
+        };
+        log.push(format!(
+            "World camera centered on node {}{}",
+            node_id, beacon_status
+        ));
     } else {
         marker.position = None;
         marker.node_id = None;
@@ -1083,11 +1093,97 @@ fn draw_tactical_navigation(
 
     let target_pos = selected.1;
     let distance = player_pos.distance(target_pos);
-    let arrow_color = Color::srgba(0.0, 1.0, 1.0, 0.8);
-    let circle_color = Color::srgba(1.0, 1.0, 0.0, 0.6);
+
+    // Different colors: cyan = unconfirmed, green = confirmed (Tab pressed)
+    let (arrow_color, target_color) = if targets.manually_selected {
+        (
+            Color::srgba(0.2, 1.0, 0.3, 0.9), // Green - locked on
+            Color::srgba(0.2, 1.0, 0.3, 0.8),
+        )
+    } else {
+        (
+            Color::srgba(0.0, 1.0, 1.0, 0.8), // Cyan - not confirmed
+            Color::srgba(0.0, 1.0, 1.0, 0.5),
+        )
+    };
+
+    // Always draw targeting reticle on the target itself
+    let reticle_size = if targets.manually_selected { 18.0 } else { 14.0 };
+    let inner_gap = reticle_size * 0.4;
+    // Draw crosshair lines with gap in center
+    gizmos.line_2d(
+        target_pos + Vec2::new(-reticle_size, 0.0),
+        target_pos + Vec2::new(-inner_gap, 0.0),
+        target_color,
+    );
+    gizmos.line_2d(
+        target_pos + Vec2::new(inner_gap, 0.0),
+        target_pos + Vec2::new(reticle_size, 0.0),
+        target_color,
+    );
+    gizmos.line_2d(
+        target_pos + Vec2::new(0.0, -reticle_size),
+        target_pos + Vec2::new(0.0, -inner_gap),
+        target_color,
+    );
+    gizmos.line_2d(
+        target_pos + Vec2::new(0.0, inner_gap),
+        target_pos + Vec2::new(0.0, reticle_size),
+        target_color,
+    );
+    // Draw corner brackets when confirmed
+    if targets.manually_selected {
+        let bracket_size = reticle_size + 6.0;
+        let corner_len = 6.0;
+        // Top-left
+        gizmos.line_2d(
+            target_pos + Vec2::new(-bracket_size, bracket_size),
+            target_pos + Vec2::new(-bracket_size + corner_len, bracket_size),
+            target_color,
+        );
+        gizmos.line_2d(
+            target_pos + Vec2::new(-bracket_size, bracket_size),
+            target_pos + Vec2::new(-bracket_size, bracket_size - corner_len),
+            target_color,
+        );
+        // Top-right
+        gizmos.line_2d(
+            target_pos + Vec2::new(bracket_size, bracket_size),
+            target_pos + Vec2::new(bracket_size - corner_len, bracket_size),
+            target_color,
+        );
+        gizmos.line_2d(
+            target_pos + Vec2::new(bracket_size, bracket_size),
+            target_pos + Vec2::new(bracket_size, bracket_size - corner_len),
+            target_color,
+        );
+        // Bottom-left
+        gizmos.line_2d(
+            target_pos + Vec2::new(-bracket_size, -bracket_size),
+            target_pos + Vec2::new(-bracket_size + corner_len, -bracket_size),
+            target_color,
+        );
+        gizmos.line_2d(
+            target_pos + Vec2::new(-bracket_size, -bracket_size),
+            target_pos + Vec2::new(-bracket_size, -bracket_size + corner_len),
+            target_color,
+        );
+        // Bottom-right
+        gizmos.line_2d(
+            target_pos + Vec2::new(bracket_size, -bracket_size),
+            target_pos + Vec2::new(bracket_size - corner_len, -bracket_size),
+            target_color,
+        );
+        gizmos.line_2d(
+            target_pos + Vec2::new(bracket_size, -bracket_size),
+            target_pos + Vec2::new(bracket_size, -bracket_size + corner_len),
+            target_color,
+        );
+    }
 
     const NEAR_THRESHOLD: f32 = 150.0;
 
+    // Draw directional arrow near player when target is far
     if distance > NEAR_THRESHOLD {
         let direction = (target_pos - player_pos).normalize_or_zero();
         if direction.length_squared() < 0.01 {
@@ -1113,9 +1209,25 @@ fn draw_tactical_navigation(
             arrow_end - direction * tip_size - perpendicular * (tip_size * 0.5),
             arrow_color,
         );
-    } else {
-        gizmos.circle_2d(target_pos, 20.0, circle_color);
+
+        // Draw lock-on brackets when confirmed
+        if targets.manually_selected {
+            let bracket_size = 6.0;
+            let bracket_offset = arrow_offset - 10.0;
+            let bracket_pos = player_pos + direction * bracket_offset;
+            gizmos.line_2d(
+                bracket_pos + perpendicular * bracket_size,
+                bracket_pos + perpendicular * bracket_size * 0.5,
+                arrow_color,
+            );
+            gizmos.line_2d(
+                bracket_pos - perpendicular * bracket_size,
+                bracket_pos - perpendicular * bracket_size * 0.5,
+                arrow_color,
+            );
+        }
     }
+    // Target reticle already drawn above regardless of distance
 }
 
 const BEACON_ARROW_OFFSET: f32 = 40.0;
@@ -1542,6 +1654,7 @@ fn update_route_labels(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_node_labels(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -1624,6 +1737,10 @@ fn handle_render_toggles(
     mut commands: Commands,
     visuals: Query<Entity, With<NodeVisual>>,
 ) {
+    if !shift_pressed(&input) {
+        return;
+    }
+
     let mut updated = false;
 
     if input.just_pressed(bindings.toggle_nodes) {
@@ -1687,17 +1804,19 @@ fn handle_intel_refresh(
     mut cooldown: ResMut<IntelRefreshCooldown>,
     mut intel_query: Query<&mut SystemIntel>,
 ) {
-    if input.just_pressed(bindings.refresh_intel) {
-        if ticks.tick < cooldown.next_allowed_tick {
-            return;
-        }
-
-        for mut intel in intel_query.iter_mut() {
-            refresh_intel(&mut intel, ticks.tick);
-        }
-        cooldown.next_allowed_tick = ticks.tick.saturating_add(cooldown.cooldown_ticks);
-        info!("Intel refreshed");
+    if !shift_pressed(&input) || !input.just_pressed(bindings.refresh_intel) {
+        return;
     }
+
+    if ticks.tick < cooldown.next_allowed_tick {
+        return;
+    }
+
+    for mut intel in intel_query.iter_mut() {
+        refresh_intel(&mut intel, ticks.tick);
+    }
+    cooldown.next_allowed_tick = ticks.tick.saturating_add(cooldown.cooldown_ticks);
+    info!("Intel refreshed");
 }
 
 fn handle_intel_advance(
@@ -1705,12 +1824,14 @@ fn handle_intel_advance(
     bindings: Res<InputBindings>,
     mut intel_query: Query<&mut SystemIntel>,
 ) {
-    if input.just_pressed(bindings.advance_intel) {
-        for mut intel in intel_query.iter_mut() {
-            advance_intel_layer(&mut intel);
-        }
-        info!("Intel layer advanced");
+    if !shift_pressed(&input) || !input.just_pressed(bindings.advance_intel) {
+        return;
     }
+
+    for mut intel in intel_query.iter_mut() {
+        advance_intel_layer(&mut intel);
+    }
+    info!("Intel layer advanced");
 }
 
 fn layer_short(layer: KnowledgeLayer) -> &'static str {
