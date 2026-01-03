@@ -18,7 +18,11 @@ This document lists the current bootstrap controls and what they affect.
 
 - Space: toggle pause.
 - `[` / `]`: decrease/increase simulation tick rate.
+
+## Map Controls
+
 - `M`: toggle map view (macro map vs world view; ships/stations render in world view).
+- `C`: cycle map zoom level (map view only).
 
 ## Debug Window (F3 to toggle)
 
@@ -35,7 +39,6 @@ Press `F3` to open/close the debug window. All debug commands only work when the
 
 ### Map & Debug Rendering (debug window only)
 
-- `C`: cycle map zoom level (map view only).
 - `N`: toggle node rendering.
 - `R`: toggle route rendering.
 - `F`: toggle fog/intel rings.
