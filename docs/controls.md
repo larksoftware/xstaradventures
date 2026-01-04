@@ -8,7 +8,7 @@ This document lists the current bootstrap controls and what they affect.
 - `A` / `D`: rotate ship left/right.
 - `Space`: apply braking thrust (decelerates toward zero; disabled while W/S held).
 - `N`: engage autopilot to selected target (press Tab first to select; movement keys disengage).
-- `F`: interact (mine ore, refuel station, transfer ore, build outpost).
+- `F`: interact (mine ore, refuel station, transfer ore, build outpost, activate jump gate).
 - `H`: toggle home beacon arrow (points to nearest revealed node).
 - Left Mouse Button: fire weapon at pirates.
 - `Tab`: cycle through nearby tactical targets (shows arrow when far, circle when near).
@@ -17,6 +17,11 @@ This document lists the current bootstrap controls and what they affect.
 **Note**: Movement uses realistic space physics. Thrust accelerates your ship in the direction it's facing. Ship will continue moving at current velocity until you apply counter-thrust to slow down or change direction.
 
 **Autopilot**: Press Tab to select a target, then N to engage autopilot. The ship will rotate toward the target, accelerate, then brake to stop within docking range. Autopilot disengages automatically on arrival, or if any movement key is pressed.
+
+**Jump Gates**: Gates connect zones and appear along routes between nodes. To jump:
+1. Fly near a jump gate (within 25 units).
+2. Press F to activate. Costs 5 fuel.
+3. After a brief transition, you arrive in the destination zone.
 
 ## Simulation Controls
 
