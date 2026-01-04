@@ -69,6 +69,11 @@ impl TextBundle {
         self.background_color = BackgroundColor(color);
         self
     }
+
+    pub fn with_z_index(mut self, z_index: ZIndex) -> Self {
+        self.z_index = z_index;
+        self
+    }
 }
 
 #[derive(Bundle, Default)]

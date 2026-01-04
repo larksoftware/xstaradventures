@@ -106,7 +106,8 @@ pub fn setup_hover_panel(mut commands: Commands, asset_server: Res<AssetServer>)
             padding: UiRect::all(Val::Px(6.0)),
             ..default()
         })
-        .with_background_color(Color::srgba(0.05, 0.08, 0.12, 0.9)),
+        .with_background_color(Color::srgb(0.05, 0.08, 0.12))
+        .with_z_index(ZIndex(100)), // Render above node labels
     ));
 }
 
