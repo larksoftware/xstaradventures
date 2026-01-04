@@ -48,17 +48,14 @@ impl Plugin for UIPlugin {
         )
         .add_systems(
             Update,
-            (ui_root, hud::update_hud, debug::update_debug_panel)
-                .run_if(in_state(GameState::InGame)),
+            (ui_root, debug::update_debug_panel).run_if(in_state(GameState::InGame)),
         )
         .add_systems(
             Update,
             (
                 log::update_log_panel,
-                hud::update_cooldown_panel,
                 hud::update_player_panel,
                 fleet::update_fleet_panel,
-                hud::update_focus_panel,
                 map_panels::sync_map_ui_visibility,
                 map_panels::sync_map_grid_visibility,
             ),

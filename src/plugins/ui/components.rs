@@ -21,16 +21,7 @@ pub struct WorldUi;
 // =============================================================================
 
 #[derive(Component)]
-pub struct HudText;
-
-#[derive(Component)]
 pub struct PlayerPanelText;
-
-#[derive(Component)]
-pub struct CooldownText;
-
-#[derive(Component)]
-pub struct FocusText;
 
 // =============================================================================
 // Log Components
