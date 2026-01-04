@@ -57,6 +57,11 @@ pub fn draw_tactical_navigation(
     targets: Res<NearbyTargets>,
     player_query: Query<&Transform, With<PlayerControl>>,
 ) {
+    // Only draw when player has manually selected a target
+    if !targets.manually_selected {
+        return;
+    }
+
     if targets.entities.is_empty() {
         return;
     }
@@ -83,25 +88,12 @@ pub fn draw_tactical_navigation(
     let target_pos = selected.1;
     let distance = player_pos.distance(target_pos);
 
-    // Different colors: cyan = unconfirmed, green = confirmed (Tab pressed)
-    let (arrow_color, target_color) = if targets.manually_selected {
-        (
-            Color::srgba(0.2, 1.0, 0.3, 0.9), // Green - locked on
-            Color::srgba(0.2, 1.0, 0.3, 0.8),
-        )
-    } else {
-        (
-            Color::srgba(0.0, 1.0, 1.0, 0.8), // Cyan - not confirmed
-            Color::srgba(0.0, 1.0, 1.0, 0.5),
-        )
-    };
+    // Green color for locked-on target
+    let arrow_color = Color::srgba(0.2, 1.0, 0.3, 0.9);
+    let target_color = Color::srgba(0.2, 1.0, 0.3, 0.8);
 
-    // Always draw targeting reticle on the target itself
-    let reticle_size = if targets.manually_selected {
-        18.0
-    } else {
-        14.0
-    };
+    // Draw targeting reticle on the target
+    let reticle_size = 18.0;
     let inner_gap = reticle_size * 0.4;
     // Draw crosshair lines with gap in center
     gizmos.line_2d(
@@ -124,55 +116,53 @@ pub fn draw_tactical_navigation(
         target_pos + Vec2::new(0.0, reticle_size),
         target_color,
     );
-    // Draw corner brackets when confirmed
-    if targets.manually_selected {
-        let bracket_size = reticle_size + 6.0;
-        let corner_len = 6.0;
-        // Top-left
-        gizmos.line_2d(
-            target_pos + Vec2::new(-bracket_size, bracket_size),
-            target_pos + Vec2::new(-bracket_size + corner_len, bracket_size),
-            target_color,
-        );
-        gizmos.line_2d(
-            target_pos + Vec2::new(-bracket_size, bracket_size),
-            target_pos + Vec2::new(-bracket_size, bracket_size - corner_len),
-            target_color,
-        );
-        // Top-right
-        gizmos.line_2d(
-            target_pos + Vec2::new(bracket_size, bracket_size),
-            target_pos + Vec2::new(bracket_size - corner_len, bracket_size),
-            target_color,
-        );
-        gizmos.line_2d(
-            target_pos + Vec2::new(bracket_size, bracket_size),
-            target_pos + Vec2::new(bracket_size, bracket_size - corner_len),
-            target_color,
-        );
-        // Bottom-left
-        gizmos.line_2d(
-            target_pos + Vec2::new(-bracket_size, -bracket_size),
-            target_pos + Vec2::new(-bracket_size + corner_len, -bracket_size),
-            target_color,
-        );
-        gizmos.line_2d(
-            target_pos + Vec2::new(-bracket_size, -bracket_size),
-            target_pos + Vec2::new(-bracket_size, -bracket_size + corner_len),
-            target_color,
-        );
-        // Bottom-right
-        gizmos.line_2d(
-            target_pos + Vec2::new(bracket_size, -bracket_size),
-            target_pos + Vec2::new(bracket_size - corner_len, -bracket_size),
-            target_color,
-        );
-        gizmos.line_2d(
-            target_pos + Vec2::new(bracket_size, -bracket_size),
-            target_pos + Vec2::new(bracket_size, -bracket_size + corner_len),
-            target_color,
-        );
-    }
+    // Draw corner brackets
+    let bracket_size = reticle_size + 6.0;
+    let corner_len = 6.0;
+    // Top-left
+    gizmos.line_2d(
+        target_pos + Vec2::new(-bracket_size, bracket_size),
+        target_pos + Vec2::new(-bracket_size + corner_len, bracket_size),
+        target_color,
+    );
+    gizmos.line_2d(
+        target_pos + Vec2::new(-bracket_size, bracket_size),
+        target_pos + Vec2::new(-bracket_size, bracket_size - corner_len),
+        target_color,
+    );
+    // Top-right
+    gizmos.line_2d(
+        target_pos + Vec2::new(bracket_size, bracket_size),
+        target_pos + Vec2::new(bracket_size - corner_len, bracket_size),
+        target_color,
+    );
+    gizmos.line_2d(
+        target_pos + Vec2::new(bracket_size, bracket_size),
+        target_pos + Vec2::new(bracket_size, bracket_size - corner_len),
+        target_color,
+    );
+    // Bottom-left
+    gizmos.line_2d(
+        target_pos + Vec2::new(-bracket_size, -bracket_size),
+        target_pos + Vec2::new(-bracket_size + corner_len, -bracket_size),
+        target_color,
+    );
+    gizmos.line_2d(
+        target_pos + Vec2::new(-bracket_size, -bracket_size),
+        target_pos + Vec2::new(-bracket_size, -bracket_size + corner_len),
+        target_color,
+    );
+    // Bottom-right
+    gizmos.line_2d(
+        target_pos + Vec2::new(bracket_size, -bracket_size),
+        target_pos + Vec2::new(bracket_size - corner_len, -bracket_size),
+        target_color,
+    );
+    gizmos.line_2d(
+        target_pos + Vec2::new(bracket_size, -bracket_size),
+        target_pos + Vec2::new(bracket_size, -bracket_size + corner_len),
+        target_color,
+    );
 
     const NEAR_THRESHOLD: f32 = 150.0;
 
@@ -203,24 +193,21 @@ pub fn draw_tactical_navigation(
             arrow_color,
         );
 
-        // Draw lock-on brackets when confirmed
-        if targets.manually_selected {
-            let bracket_size = 6.0;
-            let bracket_offset = arrow_offset - 10.0;
-            let bracket_pos = player_pos + direction * bracket_offset;
-            gizmos.line_2d(
-                bracket_pos + perpendicular * bracket_size,
-                bracket_pos + perpendicular * bracket_size * 0.5,
-                arrow_color,
-            );
-            gizmos.line_2d(
-                bracket_pos - perpendicular * bracket_size,
-                bracket_pos - perpendicular * bracket_size * 0.5,
-                arrow_color,
-            );
-        }
+        // Draw lock-on brackets near player
+        let bracket_size = 6.0;
+        let bracket_offset = arrow_offset - 10.0;
+        let bracket_pos = player_pos + direction * bracket_offset;
+        gizmos.line_2d(
+            bracket_pos + perpendicular * bracket_size,
+            bracket_pos + perpendicular * bracket_size * 0.5,
+            arrow_color,
+        );
+        gizmos.line_2d(
+            bracket_pos - perpendicular * bracket_size,
+            bracket_pos - perpendicular * bracket_size * 0.5,
+            arrow_color,
+        );
     }
-    // Target reticle already drawn above regardless of distance
 }
 
 pub fn draw_home_beacon(

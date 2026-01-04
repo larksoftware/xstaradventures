@@ -6,9 +6,8 @@ use bevy::window::PrimaryWindow;
 
 use crate::compat::Camera2dBundle;
 use crate::plugins::core::{DebugWindow, InputBindings, ViewMode};
-use crate::world::{Sector, SystemIntel, SystemNode};
+use crate::world::{SystemIntel, SystemNode};
 
-use super::components::map_center;
 use super::effects::HomeBeaconEnabled;
 use super::map::FocusMarker;
 
@@ -21,11 +20,12 @@ pub const MAP_EXTENT_X: f32 = 600.0;
 #[allow(dead_code)]
 pub const MAP_EXTENT_Y: f32 = 360.0;
 
-/// Zoom configuration for map view
-pub const MAP_ZOOM_MIN: f32 = 0.3;
-pub const MAP_ZOOM_MAX: f32 = 2.0;
-pub const MAP_ZOOM_DEFAULT: f32 = 0.8;
-pub const MAP_ZOOM_STEP: f32 = 0.1;
+/// Zoom configuration for map view (scaled for 5x larger world)
+/// Smaller scale = more zoomed in (things appear larger)
+pub const MAP_ZOOM_MIN: f32 = 0.4;
+pub const MAP_ZOOM_MAX: f32 = 5.0;
+pub const MAP_ZOOM_DEFAULT: f32 = 1.5;
+pub const MAP_ZOOM_STEP: f32 = 0.3;
 
 // =============================================================================
 // Resources
@@ -149,7 +149,7 @@ pub fn sync_camera_view(
     mut projections: Query<&mut Projection, With<Camera2d>>,
     mut transforms: Query<&mut Transform, With<Camera2d>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    sector: Res<Sector>,
+    nodes: Query<(&SystemNode, &SystemIntel)>,
 ) {
     let scale = match *view {
         ViewMode::World => 0.6,
@@ -169,11 +169,31 @@ pub fn sync_camera_view(
     }
 
     if matches!(*view, ViewMode::Map) {
-        let center = map_center(&sector);
+        // Center on revealed nodes only
+        let center = revealed_nodes_center(&nodes);
         for mut transform in transforms.iter_mut() {
             transform.translation.x = center.x + pan.offset.x;
             transform.translation.y = center.y + pan.offset.y;
         }
+    }
+}
+
+/// Calculate the center of revealed nodes only
+fn revealed_nodes_center(nodes: &Query<(&SystemNode, &SystemIntel)>) -> Vec2 {
+    let mut sum = Vec2::ZERO;
+    let mut count = 0.0;
+
+    for (node, intel) in nodes.iter() {
+        if intel.revealed {
+            sum += node.position;
+            count += 1.0;
+        }
+    }
+
+    if count > 0.0 {
+        sum / count
+    } else {
+        Vec2::ZERO
     }
 }
 
@@ -331,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn map_zoom_default_is_point_eight() {
+    fn map_zoom_default_is_one_point_five() {
         let zoom = MapZoomOverride::default();
         assert_close(zoom.scale, MAP_ZOOM_DEFAULT);
     }
@@ -423,6 +443,6 @@ mod tests {
     #[test]
     fn map_zoom_label_shows_scale() {
         let zoom = MapZoomOverride::default();
-        assert_eq!(zoom.label(), "0.80");
+        assert_eq!(zoom.label(), "1.50");
     }
 }

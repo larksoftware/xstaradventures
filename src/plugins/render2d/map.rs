@@ -127,7 +127,7 @@ pub fn spawn_node_visuals(
         let sprite = SpriteBundle {
             sprite: Sprite {
                 color: Color::srgba(0.2, 0.75, 0.9, alpha * intensity),
-                custom_size: Some(Vec2::splat(12.0)),
+                custom_size: Some(Vec2::splat(24.0)),
                 ..default()
             },
             transform: Transform::from_xyz(node.position.x, node.position.y, 0.0),
@@ -211,7 +211,7 @@ pub fn draw_intel_rings(
         }
         let t = intel.confidence.clamp(0.0, 1.0);
         let color = Color::srgba(0.9 * (1.0 - t), 0.8 * t, 0.3, 0.6);
-        let radius = 10.0 + (1.0 - t) * 6.0;
+        let radius = 20.0 + (1.0 - t) * 12.0;
         gizmos.circle_2d(node.position, radius, color);
     }
 }
@@ -366,15 +366,16 @@ pub fn update_node_labels(
             continue;
         }
         let label = format!(
-            "L{} {:.0}% {}",
+            "{} L{} {:.0}% {}",
+            node.id,
             layer_short(intel.layer),
             intel.confidence * 100.0,
             modifier_icon(node.modifier),
         );
 
-        let position = node.position + Vec2::new(0.0, 14.0);
+        let position = node.position + Vec2::new(0.0, 35.0);
         if let Ok(screen) = camera.world_to_viewport(camera_transform, position.extend(0.0)) {
-            let label_pos = Vec2::new(screen.x + 6.0, screen.y - 12.0);
+            let label_pos = Vec2::new(screen.x + 6.0, screen.y - 14.0);
             let alpha = 0.4 + 0.6 * intel.confidence.clamp(0.0, 1.0);
             commands.spawn((
                 NodeLabel,
@@ -451,9 +452,10 @@ pub fn update_hovered_node(
     let mut closest_confidence = 0.0;
     let mut closest_modifier = None;
     let mut closest_dist = 9999.0;
-    let enter_radius = 14.0;
+    // Hover radius matches intel ring size (20-32 world units)
+    let enter_radius = 35.0;
     // Larger radius to keep hovering - prevents edge flicker
-    let keep_radius = 20.0;
+    let keep_radius = 40.0;
 
     for (node, intel) in nodes.iter() {
         if !intel.revealed {

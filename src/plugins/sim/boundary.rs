@@ -26,8 +26,9 @@ pub enum BoundaryWarningLevel {
 // Constants
 // =============================================================================
 
-const BOUNDARY_SOFT_WARNING: f32 = 1200.0;
-const BOUNDARY_DANGER_ZONE: f32 = 2200.0;
+// 5x zone scale: warning at 6000, danger at 11000
+const BOUNDARY_SOFT_WARNING: f32 = 6000.0;
+const BOUNDARY_DANGER_ZONE: f32 = 11000.0;
 
 // =============================================================================
 // Systems

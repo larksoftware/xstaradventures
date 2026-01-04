@@ -79,6 +79,37 @@ pub fn setup_map_grid(mut commands: Commands) {
         });
 }
 
+pub fn setup_hover_panel(mut commands: Commands, asset_server: Res<AssetServer>) {
+    let font_path = "fonts/SpaceMono-Regular.ttf";
+    let font_on_disk = std::path::Path::new("assets").join(font_path);
+
+    if !font_on_disk.exists() {
+        return;
+    }
+
+    let font = asset_server.load(font_path);
+
+    commands.spawn((
+        HoverText,
+        MapUi,
+        crate::compat::TextBundle::from_section(
+            "",
+            crate::compat::TextStyle {
+                font,
+                font_size: 13.0,
+                color: Color::srgb(0.9, 0.95, 1.0),
+            },
+        )
+        .with_node(UiNode {
+            position_type: PositionType::Absolute,
+            display: Display::None,
+            padding: UiRect::all(Val::Px(6.0)),
+            ..default()
+        })
+        .with_background_color(Color::srgba(0.05, 0.08, 0.12, 0.9)),
+    ));
+}
+
 // =============================================================================
 // Update Systems
 // =============================================================================
@@ -100,13 +131,20 @@ pub fn update_node_panel(
         } else {
             let mut body = String::from("Nodes:\n");
             for (id, layer, confidence, modifier) in entries {
+                let modifier_suffix = match modifier {
+                    Some(_) => format!(
+                        " {} ({})",
+                        modifier_to_short(modifier),
+                        modifier_to_long(modifier)
+                    ),
+                    None => String::new(),
+                };
                 body.push_str(&format!(
-                    "- {} L{} {:.0}% {} ({})\n",
+                    "- {} L{} {:.0}%{}\n",
                     id,
                     layer_to_short(layer),
                     confidence * 100.0,
-                    modifier_to_short(modifier),
-                    modifier_to_long(modifier)
+                    modifier_suffix
                 ));
             }
             text.0 = body.trim_end().to_string();
@@ -122,15 +160,20 @@ pub fn update_hover_panel(
         match (hovered.id, hovered.screen_pos) {
             (Some(id), Some(pos)) => {
                 let layer = hovered.layer.unwrap_or(KnowledgeLayer::Existence);
-                let modifier = modifier_to_short(hovered.modifier);
-                let modifier_long = modifier_to_long(hovered.modifier);
+                let modifier_suffix = match hovered.modifier {
+                    Some(_) => format!(
+                        " {} {}",
+                        modifier_to_short(hovered.modifier),
+                        modifier_to_long(hovered.modifier)
+                    ),
+                    None => String::new(),
+                };
                 text.0 = format!(
-                    "{} | L{} {:.0}% {} {}",
+                    "{} | L{} {:.0}%{}",
                     id,
                     layer_to_short(layer),
                     hovered.confidence * 100.0,
-                    modifier,
-                    modifier_long,
+                    modifier_suffix,
                 );
                 node.display = Display::Flex;
                 node.right = Val::Auto;

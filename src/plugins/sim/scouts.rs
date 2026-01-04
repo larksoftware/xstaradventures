@@ -9,7 +9,9 @@ use crate::plugins::core::{EventLog, InputBindings};
 use crate::plugins::player::PlayerControl;
 use crate::ships::{Ship, ShipState};
 use crate::stations::Station;
-use crate::world::{JumpGate, KnowledgeLayer, SystemIntel, SystemNode, ZoneId, JUMP_TRANSITION_SECONDS};
+use crate::world::{
+    JumpGate, KnowledgeLayer, SystemIntel, SystemNode, ZoneId, JUMP_TRANSITION_SECONDS,
+};
 
 use super::SimTickCount;
 

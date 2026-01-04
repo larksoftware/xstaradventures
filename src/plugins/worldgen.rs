@@ -109,20 +109,9 @@ fn apply_seed_world(commands: &mut Commands, sector: &mut Sector, seed: u64) {
         nodes.push(node);
     }
 
-    for index in 0..nodes.len() {
-        let a = &nodes[index];
-        let b = &nodes[(index + 1) % nodes.len()];
-        let distance = a.position.distance(b.position);
-        let risk = next_unit(&mut rng);
-
-        sector.routes.push(RouteEdge {
-            from: a.id,
-            to: b.id,
-            distance,
-            risk,
-        });
-    }
-
+    // Generate routes using MST + random extras (min 1, max 5 connections per node)
+    let routes = generate_routes(&nodes, &mut rng);
+    sector.routes = routes;
     sector.nodes = nodes.clone();
 
     // Spawn jump gates for each route (one at each end)
@@ -367,8 +356,9 @@ fn spawn_starting_entities(commands: &mut Commands, sector: &Sector) {
 
 fn spawn_player_ship(commands: &mut Commands, node: &SystemNode) {
     let capacity = ship_fuel_capacity(ShipKind::PlayerShip);
-    let x = node.position.x - 8.0;
-    let y = node.position.y - 24.0;
+    // Spawn player at zone center - safe from gates (300 units out) and asteroid fields (800+ units out)
+    let x = node.position.x;
+    let y = node.position.y;
 
     info!(
         "Spawning player ship at ({:.1}, {:.1}, 0.4) in zone {}",
@@ -504,7 +494,8 @@ fn spawn_pirates(commands: &mut Commands, sector: &Sector, rng: &mut u64) {
 
         for i in 0..pirate_count {
             let angle = next_unit(rng) * std::f32::consts::TAU;
-            let radius = 30.0 + next_unit(rng) * 50.0;
+            // 5x zone scale: 150-400 radius
+            let radius = 150.0 + next_unit(rng) * 250.0;
             let offset_x = angle.cos() * radius;
             let offset_y = angle.sin() * radius;
 
@@ -530,9 +521,10 @@ fn spawn_pirates(commands: &mut Commands, sector: &Sector, rng: &mut u64) {
                 },
                 ZoneId(node.id),
                 Name::new(format!("Pirate-Base-{}", node.id)),
+                // 5x zone scale: offset 250, -150
                 SpatialBundle::from_transform(Transform::from_xyz(
-                    node.position.x + 50.0,
-                    node.position.y - 30.0,
+                    node.position.x + 250.0,
+                    node.position.y - 150.0,
                     0.45,
                 )),
             ));
@@ -540,8 +532,8 @@ fn spawn_pirates(commands: &mut Commands, sector: &Sector, rng: &mut u64) {
     }
 }
 
-/// Distance from node center to place gate
-const GATE_OFFSET: f32 = 60.0;
+/// Distance from node center to place gate (scaled for 5x zone size)
+const GATE_OFFSET: f32 = 300.0;
 
 fn spawn_jump_gates(commands: &mut Commands, nodes: &[SystemNode], routes: &[RouteEdge]) {
     // Create a map of node id -> node for quick lookup
@@ -621,21 +613,23 @@ fn next_position(state: &mut u64) -> Vec2 {
     let x = next_unit(state);
     let y = next_unit(state);
 
+    // 5x zone scale: ±7500 x ±5000
     Vec2::new(
-        scale_to_range(x, -1500.0, 1500.0),
-        scale_to_range(y, -1000.0, 1000.0),
+        scale_to_range(x, -7500.0, 7500.0),
+        scale_to_range(y, -5000.0, 5000.0),
     )
 }
 
 /// Generate a position near origin for the starting node
-/// Keeps player spawn well within safe boundaries (warning at 1200)
+/// Keeps player spawn well within safe boundaries (warning at 6000)
 fn next_starting_position(state: &mut u64) -> Vec2 {
     let x = next_unit(state);
     let y = next_unit(state);
 
+    // 5x zone scale: ±2000 x ±1500
     Vec2::new(
-        scale_to_range(x, -400.0, 400.0),
-        scale_to_range(y, -300.0, 300.0),
+        scale_to_range(x, -2000.0, 2000.0),
+        scale_to_range(y, -1500.0, 1500.0),
     )
 }
 
@@ -647,6 +641,142 @@ fn next_unit(state: &mut u64) -> f32 {
 
 fn scale_to_range(value: f32, min: f32, max: f32) -> f32 {
     min + (max - min) * value
+}
+
+// =============================================================================
+// Route Generation (MST + Random Extras)
+// =============================================================================
+
+const MAX_CONNECTIONS_PER_NODE: usize = 5;
+
+/// Generate routes ensuring all nodes are connected (MST) with random extra connections.
+/// - Minimum 1 connection per node (guaranteed by MST)
+/// - Maximum 5 connections per node
+/// - Deterministic based on RNG state
+fn generate_routes(nodes: &[SystemNode], rng: &mut u64) -> Vec<RouteEdge> {
+    if nodes.is_empty() {
+        return Vec::new();
+    }
+
+    let mut routes = Vec::new();
+    let mut connection_count: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+
+    // Initialize connection counts
+    for node in nodes {
+        connection_count.insert(node.id, 0);
+    }
+
+    // Build all possible edges with distances
+    let mut all_edges: Vec<(usize, usize, f32)> = Vec::new();
+    for i in 0..nodes.len() {
+        for j in (i + 1)..nodes.len() {
+            let dist = nodes[i].position.distance(nodes[j].position);
+            all_edges.push((i, j, dist));
+        }
+    }
+
+    // Sort edges by distance for MST (Kruskal's algorithm)
+    all_edges.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Union-Find for MST
+    let mut parent: Vec<usize> = (0..nodes.len()).collect();
+
+    fn find(parent: &mut [usize], i: usize) -> usize {
+        if parent[i] != i {
+            parent[i] = find(parent, parent[i]);
+        }
+        parent[i]
+    }
+
+    fn union(parent: &mut [usize], a: usize, b: usize) {
+        let root_a = find(parent, a);
+        let root_b = find(parent, b);
+        if root_a != root_b {
+            parent[root_a] = root_b;
+        }
+    }
+
+    // Phase 1: Build MST (ensures all nodes connected with minimum edges)
+    let mut mst_edges = Vec::new();
+    for &(i, j, dist) in &all_edges {
+        if find(&mut parent, i) != find(&mut parent, j) {
+            union(&mut parent, i, j);
+            mst_edges.push((i, j, dist));
+
+            let id_a = nodes[i].id;
+            let id_b = nodes[j].id;
+            *connection_count.get_mut(&id_a).unwrap() += 1;
+            *connection_count.get_mut(&id_b).unwrap() += 1;
+
+            let risk = next_unit(rng);
+            routes.push(RouteEdge {
+                from: id_a,
+                to: id_b,
+                distance: dist,
+                risk,
+            });
+
+            if mst_edges.len() == nodes.len() - 1 {
+                break;
+            }
+        }
+    }
+
+    // Phase 2: Add random extra edges (respecting max connections)
+    // Collect non-MST edges that could be added
+    let mst_set: std::collections::HashSet<(usize, usize)> = mst_edges
+        .iter()
+        .map(|&(i, j, _)| if i < j { (i, j) } else { (j, i) })
+        .collect();
+
+    let mut extra_candidates: Vec<(usize, usize, f32)> = all_edges
+        .iter()
+        .filter(|&&(i, j, _)| {
+            let key = if i < j { (i, j) } else { (j, i) };
+            !mst_set.contains(&key)
+        })
+        .copied()
+        .collect();
+
+    // Shuffle candidates using Fisher-Yates with seeded RNG
+    for i in (1..extra_candidates.len()).rev() {
+        let j = (next_unit(rng) * (i + 1) as f32) as usize;
+        extra_candidates.swap(i, j.min(i));
+    }
+
+    // Decide how many extra edges to add (randomized, typically 20-60% of node count)
+    let extra_count_base = (nodes.len() as f32 * (0.2 + next_unit(rng) * 0.4)) as usize;
+    let mut extras_added = 0;
+
+    for (i, j, dist) in extra_candidates {
+        if extras_added >= extra_count_base {
+            break;
+        }
+
+        let id_a = nodes[i].id;
+        let id_b = nodes[j].id;
+
+        let count_a = *connection_count.get(&id_a).unwrap();
+        let count_b = *connection_count.get(&id_b).unwrap();
+
+        // Only add if both nodes have room for more connections
+        if count_a < MAX_CONNECTIONS_PER_NODE && count_b < MAX_CONNECTIONS_PER_NODE {
+            *connection_count.get_mut(&id_a).unwrap() += 1;
+            *connection_count.get_mut(&id_b).unwrap() += 1;
+
+            let risk = next_unit(rng);
+            routes.push(RouteEdge {
+                from: id_a,
+                to: id_b,
+                distance: dist,
+                risk,
+            });
+
+            extras_added += 1;
+        }
+    }
+
+    routes
 }
 
 #[cfg(test)]
@@ -677,10 +807,10 @@ mod tests {
 
         for _ in 0..10 {
             let position = next_position(&mut state);
-            assert!(position.x >= -1500.0);
-            assert!(position.x <= 1500.0);
-            assert!(position.y >= -1000.0);
-            assert!(position.y <= 1000.0);
+            assert!(position.x >= -7500.0);
+            assert!(position.x <= 7500.0);
+            assert!(position.y >= -5000.0);
+            assert!(position.y <= 5000.0);
         }
     }
 
@@ -701,7 +831,9 @@ mod tests {
         queue.apply(&mut world);
 
         assert_eq!(sector.nodes.len(), 50);
-        assert_eq!(sector.routes.len(), 50);
+        // MST has n-1 = 49 routes minimum, plus random extras
+        assert!(sector.routes.len() >= 49, "Need at least MST routes");
+        assert!(sector.routes.len() <= 100, "Should not exceed reasonable route count");
     }
 
     #[test]
@@ -920,6 +1052,98 @@ mod tests {
             expected_max,
             eligible_zone_count,
             pirate_zone_count
+        );
+    }
+
+    #[test]
+    fn every_node_has_one_to_five_connections() {
+        let mut world = World::default();
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        let mut sector = Sector::default();
+
+        apply_seed_world(&mut commands, &mut sector, 1337);
+        queue.apply(&mut world);
+
+        // Count connections per node
+        let mut connection_counts: std::collections::HashMap<u32, usize> =
+            std::collections::HashMap::new();
+
+        for node in &sector.nodes {
+            connection_counts.insert(node.id, 0);
+        }
+
+        for route in &sector.routes {
+            *connection_counts.get_mut(&route.from).unwrap() += 1;
+            *connection_counts.get_mut(&route.to).unwrap() += 1;
+        }
+
+        for (node_id, count) in &connection_counts {
+            assert!(
+                *count >= 1,
+                "Node {} has {} connections, minimum is 1",
+                node_id,
+                count
+            );
+            assert!(
+                *count <= 5,
+                "Node {} has {} connections, maximum is 5",
+                node_id,
+                count
+            );
+        }
+    }
+
+    #[test]
+    fn same_seed_produces_identical_routes() {
+        let seed = 42u64;
+
+        let mut world1 = World::default();
+        let mut queue1 = CommandQueue::default();
+        let mut commands1 = Commands::new(&mut queue1, &world1);
+        let mut sector1 = Sector::default();
+        apply_seed_world(&mut commands1, &mut sector1, seed);
+        queue1.apply(&mut world1);
+
+        let mut world2 = World::default();
+        let mut queue2 = CommandQueue::default();
+        let mut commands2 = Commands::new(&mut queue2, &world2);
+        let mut sector2 = Sector::default();
+        apply_seed_world(&mut commands2, &mut sector2, seed);
+        queue2.apply(&mut world2);
+
+        assert_eq!(
+            sector1.routes.len(),
+            sector2.routes.len(),
+            "Same seed should produce same number of routes"
+        );
+
+        for (r1, r2) in sector1.routes.iter().zip(sector2.routes.iter()) {
+            assert_eq!(r1.from, r2.from, "Route 'from' should match");
+            assert_eq!(r1.to, r2.to, "Route 'to' should match");
+        }
+    }
+
+    #[test]
+    fn different_seeds_produce_different_route_counts() {
+        let mut route_counts = std::collections::HashSet::new();
+
+        for seed in [100u64, 200, 300, 400, 500] {
+            let mut world = World::default();
+            let mut queue = CommandQueue::default();
+            let mut commands = Commands::new(&mut queue, &world);
+            let mut sector = Sector::default();
+            apply_seed_world(&mut commands, &mut sector, seed);
+            queue.apply(&mut world);
+
+            route_counts.insert(sector.routes.len());
+        }
+
+        // With different seeds, we should see at least 2 different route counts
+        assert!(
+            route_counts.len() >= 2,
+            "Different seeds should produce varying route counts, got {:?}",
+            route_counts
         );
     }
 }

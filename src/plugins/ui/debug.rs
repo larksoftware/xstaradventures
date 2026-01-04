@@ -160,6 +160,13 @@ pub fn update_debug_panel(
                     body.push_str("  I   : refresh intel\n");
                     body.push_str("  O   : advance intel\n");
                     body.push_str("  K   : randomize modifiers\n");
+                    body.push_str("\nRender Toggles:\n");
+                    body.push_str("  N   : toggle nodes\n");
+                    body.push_str("  R   : toggle routes\n");
+                    body.push_str("  F   : toggle rings\n");
+                    body.push_str("  G   : toggle grid\n");
+                    body.push_str("  T   : toggle route labels\n");
+                    body.push_str("  Y   : toggle node labels\n");
 
                     text.0 = body;
                     break;

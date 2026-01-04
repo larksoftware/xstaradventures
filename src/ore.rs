@@ -7,12 +7,21 @@ pub enum OreKind {
     FuelOre,
 }
 
+/// Mineable asteroid with ore resources
 #[derive(Component, Debug, Clone, Copy)]
 pub struct OreNode {
     pub kind: OreKind,
     pub remaining: f32,
     pub capacity: f32,
     pub rate_per_second: f32,
+}
+
+/// Non-mineable decorative asteroid (obstacle/scenery)
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct Asteroid {
+    /// Visual size multiplier (0.5 to 1.5)
+    #[allow(dead_code)] // Used by renderer once asteroid rendering is implemented
+    pub size: f32,
 }
 
 impl OreNode {

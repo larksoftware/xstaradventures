@@ -12,8 +12,8 @@ use crate::world::ZoneId;
 
 use super::components::{
     ContactsListContainer, FleetDetailDivider, FleetDetailText, FleetListContainer,
-    FleetPanelMarker, IntelContentText, IntelPanelText, LogContentText,
-    LogPanelMarker, MapUi, PlayerPanelText, TacticalPanelText, WorldUi,
+    FleetPanelMarker, IntelContentText, IntelPanelText, LogContentText, LogPanelMarker, MapUi,
+    PlayerPanelText, TacticalPanelText, WorldUi,
 };
 
 // =============================================================================
@@ -68,6 +68,7 @@ fn spawn_log_panel(commands: &mut Commands, font: &Handle<Font>) {
     commands
         .spawn((
             LogPanelMarker,
+            WorldUi,
             NodeBundle {
                 node: UiNode {
                     position_type: PositionType::Absolute,

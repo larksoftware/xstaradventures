@@ -174,7 +174,7 @@ pub fn modifier_to_short(modifier: Option<ZoneModifier>) -> &'static str {
         Some(ZoneModifier::NebulaInterference) => "NEB",
         Some(ZoneModifier::RichOreVeins) => "ORE",
         Some(ZoneModifier::ClearSignals) => "CLR",
-        None => "--",
+        None => "",
     }
 }
 

@@ -42,6 +42,7 @@ impl Plugin for UIPlugin {
             Startup,
             (
                 map_panels::setup_map_grid,
+                map_panels::setup_hover_panel,
                 hud::setup_hud,
                 debug::setup_debug_panel,
             ),

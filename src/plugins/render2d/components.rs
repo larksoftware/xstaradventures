@@ -185,6 +185,7 @@ pub fn is_visible_in_zone(entity_zone: Option<u32>, player_zone: u32) -> bool {
     }
 }
 
+#[allow(dead_code)] // Used in tests
 pub fn map_center(sector: &Sector) -> Vec2 {
     if sector.nodes.is_empty() {
         return Vec2::ZERO;
