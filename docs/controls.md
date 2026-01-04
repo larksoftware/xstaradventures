@@ -26,6 +26,8 @@ This document lists the current bootstrap controls and what they affect.
 ## Map Controls
 
 - `M`: toggle map view (macro map vs world view; ships/stations render in world view).
+- Mouse Wheel: zoom in/out (smooth, works at all times in map view).
+- Right-click + Drag: pan the map view.
 
 ## Debug Window (F3 to toggle)
 
@@ -52,7 +54,6 @@ Press `F3` to open/close the debug window. All debug commands require **Shift** 
 - `Shift+I`: refresh intel confidence to full.
 - `Shift+O`: advance intel layer by one step.
 - `Shift+K`: randomize zone modifiers.
-- `Shift+C`: cycle map zoom level.
 
 Note: Intel refresh has a short cooldown to prevent spamming.
 Note: Grid and reveal keys only affect map view.

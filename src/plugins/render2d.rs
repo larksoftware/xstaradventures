@@ -47,6 +47,7 @@ impl Plugin for Render2DPlugin {
         app.init_resource::<RenderToggles>()
             .init_resource::<IntelRefreshCooldown>()
             .init_resource::<MapZoomOverride>()
+            .init_resource::<MapPanOffset>()
             .init_resource::<FocusMarker>()
             .init_resource::<HomeBeaconEnabled>()
             .add_systems(Startup, load_player_ship_texture)
@@ -85,13 +86,18 @@ impl Plugin for Render2DPlugin {
                 Update,
                 (
                     handle_render_toggles,
-                    handle_map_zoom,
                     handle_intel_refresh,
                     handle_intel_advance,
                 )
                     .run_if(in_state(GameState::InGame))
                     .run_if(view_is_map)
                     .run_if(debug_window_open),
+            )
+            .add_systems(
+                Update,
+                (handle_map_zoom_wheel, handle_map_pan)
+                    .run_if(in_state(GameState::InGame))
+                    .run_if(view_is_map),
             )
             .add_systems(
                 Update,
@@ -144,24 +150,100 @@ impl Plugin for Render2DPlugin {
     }
 }
 
+#[allow(dead_code)]
 const MAP_EXTENT_X: f32 = 600.0;
+#[allow(dead_code)]
 const MAP_EXTENT_Y: f32 = 360.0;
 
-#[derive(Resource, Default)]
+/// Zoom configuration for map view
+pub const MAP_ZOOM_MIN: f32 = 0.3;
+pub const MAP_ZOOM_MAX: f32 = 2.0;
+pub const MAP_ZOOM_DEFAULT: f32 = 0.8;
+pub const MAP_ZOOM_STEP: f32 = 0.1;
+
+#[derive(Resource)]
 pub struct MapZoomOverride {
-    enabled: bool,
-    index: usize,
+    /// Current zoom scale (smaller = zoomed in, larger = zoomed out)
+    pub scale: f32,
+}
+
+impl Default for MapZoomOverride {
+    fn default() -> Self {
+        Self {
+            scale: MAP_ZOOM_DEFAULT,
+        }
+    }
 }
 
 impl MapZoomOverride {
     pub fn label(&self) -> String {
-        if !self.enabled {
-            return "Auto".to_string();
+        format!("{:.2}", self.scale)
+    }
+
+    /// Zoom in (decrease scale)
+    pub fn zoom_in(&mut self, amount: f32) {
+        self.scale = (self.scale - amount).clamp(MAP_ZOOM_MIN, MAP_ZOOM_MAX);
+    }
+
+    /// Zoom out (increase scale)
+    pub fn zoom_out(&mut self, amount: f32) {
+        self.scale = (self.scale + amount).clamp(MAP_ZOOM_MIN, MAP_ZOOM_MAX);
+    }
+}
+
+/// Pan offset for map view (applied as camera translation offset)
+#[derive(Resource, Default)]
+pub struct MapPanOffset {
+    /// Current pan offset from map center
+    pub offset: Vec2,
+    /// Whether a drag is currently in progress
+    dragging: bool,
+    /// Last mouse position during drag (in screen coordinates)
+    last_drag_pos: Option<Vec2>,
+}
+
+impl MapPanOffset {
+    /// Start a new drag operation
+    pub fn start_drag(&mut self, pos: Vec2) {
+        self.dragging = true;
+        self.last_drag_pos = Some(pos);
+    }
+
+    /// Update drag with current mouse position, returns the delta to apply
+    pub fn update_drag(&mut self, pos: Vec2, camera_scale: f32) -> Vec2 {
+        if !self.dragging {
+            return Vec2::ZERO;
         }
 
-        let presets = map_zoom_presets();
-        let index = self.index.min(presets.len().saturating_sub(1));
-        format!("{:.2}", presets[index])
+        match self.last_drag_pos {
+            Some(last) => {
+                let delta = pos - last;
+                self.last_drag_pos = Some(pos);
+                // Invert and scale by camera scale for 1:1 feel
+                Vec2::new(-delta.x, delta.y) * camera_scale
+            }
+            None => {
+                self.last_drag_pos = Some(pos);
+                Vec2::ZERO
+            }
+        }
+    }
+
+    /// End the current drag operation
+    pub fn end_drag(&mut self) {
+        self.dragging = false;
+        self.last_drag_pos = None;
+    }
+
+    /// Check if currently dragging
+    pub fn is_dragging(&self) -> bool {
+        self.dragging
+    }
+
+    /// Reset pan offset to zero
+    #[allow(dead_code)]
+    pub fn reset(&mut self) {
+        self.offset = Vec2::ZERO;
     }
 }
 
@@ -444,6 +526,7 @@ fn load_player_ship_texture(asset_server: Res<AssetServer>, mut commands: Comman
 fn sync_camera_view(
     view: Res<ViewMode>,
     zoom: Res<MapZoomOverride>,
+    pan: Res<MapPanOffset>,
     mut projections: Query<&mut Projection, With<Camera2d>>,
     mut transforms: Query<&mut Transform, With<Camera2d>>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -469,8 +552,8 @@ fn sync_camera_view(
     if matches!(*view, ViewMode::Map) {
         let center = map_center(&sector);
         for mut transform in transforms.iter_mut() {
-            transform.translation.x = center.x;
-            transform.translation.y = center.y;
+            transform.translation.x = center.x + pan.offset.x;
+            transform.translation.y = center.y + pan.offset.y;
         }
     }
 }
@@ -487,25 +570,53 @@ fn debug_window_open(debug_window: Res<DebugWindow>) -> bool {
     debug_window.open
 }
 
-fn handle_map_zoom(
-    input: Res<ButtonInput<KeyCode>>,
-    bindings: Res<InputBindings>,
+/// Handle mouse wheel zoom in map view (always available, not just debug mode)
+#[allow(deprecated)]
+fn handle_map_zoom_wheel(
+    mut scroll_events: EventReader<bevy::input::mouse::MouseWheel>,
     mut zoom: ResMut<MapZoomOverride>,
 ) {
-    if !shift_pressed(&input) || !input.just_pressed(bindings.map_zoom) {
-        return;
+    for event in scroll_events.read() {
+        // Scroll up = zoom in (decrease scale), scroll down = zoom out (increase scale)
+        if event.y > 0.0 {
+            zoom.zoom_in(MAP_ZOOM_STEP);
+        } else if event.y < 0.0 {
+            zoom.zoom_out(MAP_ZOOM_STEP);
+        }
     }
+}
 
-    if !zoom.enabled {
-        zoom.enabled = true;
-        zoom.index = 0;
-        return;
-    }
+/// Handle right-click drag panning in map view
+fn handle_map_pan(
+    mouse_button: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut pan: ResMut<MapPanOffset>,
+    zoom: Res<MapZoomOverride>,
+) {
+    let window = match windows.single() {
+        Ok(w) => w,
+        Err(_) => return,
+    };
 
-    zoom.index += 1;
-    if zoom.index >= map_zoom_presets().len() {
-        zoom.enabled = false;
-        zoom.index = 0;
+    let cursor_pos = match window.cursor_position() {
+        Some(pos) => pos,
+        None => {
+            // Cursor left window, end drag
+            if pan.is_dragging() {
+                pan.end_drag();
+            }
+            return;
+        }
+    };
+
+    // Right-click to pan (avoids conflict with left-click selection)
+    if mouse_button.just_pressed(MouseButton::Right) {
+        pan.start_drag(cursor_pos);
+    } else if mouse_button.pressed(MouseButton::Right) && pan.is_dragging() {
+        let delta = pan.update_drag(cursor_pos, zoom.scale);
+        pan.offset += delta;
+    } else if mouse_button.just_released(MouseButton::Right) {
+        pan.end_drag();
     }
 }
 
@@ -1708,23 +1819,8 @@ fn wrap_starfield(
     }
 }
 
-fn map_scale_for_window(window: Option<&Window>, zoom: &MapZoomOverride) -> f32 {
-    if zoom.enabled {
-        let presets = map_zoom_presets();
-        let index = zoom.index.min(presets.len().saturating_sub(1));
-        return presets[index];
-    }
-
-    let (width, height) = match window {
-        Some(window) => (window.width(), window.height()),
-        None => (1280.0, 720.0),
-    };
-
-    let scale_x = (MAP_EXTENT_X * 2.0) / width;
-    let scale_y = (MAP_EXTENT_Y * 2.0) / height;
-    let scale = scale_x.max(scale_y) * 1.05;
-
-    scale.clamp(0.6, 2.0)
+fn map_scale_for_window(_window: Option<&Window>, zoom: &MapZoomOverride) -> f32 {
+    zoom.scale
 }
 
 fn map_center(sector: &Sector) -> Vec2 {
@@ -1745,10 +1841,6 @@ fn map_center(sector: &Sector) -> Vec2 {
     } else {
         Vec2::ZERO
     }
-}
-
-fn map_zoom_presets() -> [f32; 3] {
-    [0.6, 0.8, 1.0]
 }
 
 fn update_node_visuals(
@@ -2261,7 +2353,10 @@ fn is_visible_in_zone(entity_zone: Option<u32>, player_zone: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_visible_in_zone, map_center, map_zoom_presets, risk_color};
+    use super::{
+        is_visible_in_zone, map_center, risk_color, MapPanOffset, MapZoomOverride,
+        MAP_ZOOM_DEFAULT, MAP_ZOOM_MAX, MAP_ZOOM_MIN, MAP_ZOOM_STEP,
+    };
     use crate::world::{Sector, SystemNode};
     use bevy::prelude::{Color, LinearRgba, Vec2};
 
@@ -2323,9 +2418,93 @@ mod tests {
     }
 
     #[test]
-    fn map_zoom_presets_values() {
-        let presets = map_zoom_presets();
-        assert_eq!(presets, [0.6, 0.8, 1.0]);
+    fn map_zoom_default_is_point_eight() {
+        let zoom = MapZoomOverride::default();
+        assert_close(zoom.scale, MAP_ZOOM_DEFAULT);
+    }
+
+    #[test]
+    fn map_zoom_in_decreases_scale() {
+        let mut zoom = MapZoomOverride::default();
+        let before = zoom.scale;
+        zoom.zoom_in(MAP_ZOOM_STEP);
+        assert!(zoom.scale < before);
+    }
+
+    #[test]
+    fn map_zoom_out_increases_scale() {
+        let mut zoom = MapZoomOverride::default();
+        let before = zoom.scale;
+        zoom.zoom_out(MAP_ZOOM_STEP);
+        assert!(zoom.scale > before);
+    }
+
+    #[test]
+    fn map_zoom_clamps_at_min() {
+        let mut zoom = MapZoomOverride::default();
+        for _ in 0..50 {
+            zoom.zoom_in(MAP_ZOOM_STEP);
+        }
+        assert_close(zoom.scale, MAP_ZOOM_MIN);
+    }
+
+    #[test]
+    fn map_zoom_clamps_at_max() {
+        let mut zoom = MapZoomOverride::default();
+        for _ in 0..50 {
+            zoom.zoom_out(MAP_ZOOM_STEP);
+        }
+        assert_close(zoom.scale, MAP_ZOOM_MAX);
+    }
+
+    #[test]
+    fn map_pan_default_is_zero() {
+        let pan = MapPanOffset::default();
+        assert_close(pan.offset.x, 0.0);
+        assert_close(pan.offset.y, 0.0);
+    }
+
+    #[test]
+    fn map_pan_start_drag_sets_dragging() {
+        let mut pan = MapPanOffset::default();
+        assert!(!pan.is_dragging());
+        pan.start_drag(Vec2::new(100.0, 100.0));
+        assert!(pan.is_dragging());
+    }
+
+    #[test]
+    fn map_pan_end_drag_clears_dragging() {
+        let mut pan = MapPanOffset::default();
+        pan.start_drag(Vec2::new(100.0, 100.0));
+        pan.end_drag();
+        assert!(!pan.is_dragging());
+    }
+
+    #[test]
+    fn map_pan_update_returns_delta() {
+        let mut pan = MapPanOffset::default();
+        pan.start_drag(Vec2::new(100.0, 100.0));
+        let delta = pan.update_drag(Vec2::new(110.0, 90.0), 1.0);
+        // Delta is inverted x, normal y: (-10, -10) for input delta (10, -10)
+        assert_close(delta.x, -10.0);
+        assert_close(delta.y, -10.0);
+    }
+
+    #[test]
+    fn map_pan_update_scales_by_camera_scale() {
+        let mut pan = MapPanOffset::default();
+        pan.start_drag(Vec2::new(100.0, 100.0));
+        let delta = pan.update_drag(Vec2::new(110.0, 100.0), 2.0);
+        // With scale 2.0, delta should be doubled
+        assert_close(delta.x, -20.0);
+    }
+
+    #[test]
+    fn map_pan_not_dragging_returns_zero() {
+        let mut pan = MapPanOffset::default();
+        let delta = pan.update_drag(Vec2::new(110.0, 100.0), 1.0);
+        assert_close(delta.x, 0.0);
+        assert_close(delta.y, 0.0);
     }
 
     #[test]
@@ -2347,27 +2526,9 @@ mod tests {
     }
 
     #[test]
-    fn map_zoom_presets_sorted_low_to_high() {
-        let presets = map_zoom_presets();
-        assert!(presets[0] < presets[1]);
-        assert!(presets[1] < presets[2]);
-    }
-
-    #[test]
-    fn map_zoom_presets_monotonic_spacing() {
-        let presets = map_zoom_presets();
-        let step_low = presets[1] - presets[0];
-        let step_high = presets[2] - presets[1];
-
-        assert_close(step_low, step_high);
-    }
-
-    #[test]
-    fn map_zoom_presets_mid_is_avg_of_extremes() {
-        let presets = map_zoom_presets();
-        let expected_mid = (presets[0] + presets[2]) * 0.5;
-
-        assert_close(presets[1], expected_mid);
+    fn map_zoom_label_shows_scale() {
+        let zoom = MapZoomOverride::default();
+        assert_eq!(zoom.label(), "0.80");
     }
 
     #[test]
@@ -2490,12 +2651,6 @@ mod tests {
         let center = map_center(&sector);
         assert_close(center.x, -20.0);
         assert_close(center.y, -30.0);
-    }
-
-    #[test]
-    fn map_zoom_presets_len_is_three() {
-        let presets = map_zoom_presets();
-        assert_eq!(presets.len(), 3);
     }
 
     #[test]
@@ -2678,14 +2833,6 @@ mod tests {
     }
 
     #[test]
-    fn map_zoom_presets_values_are_unique() {
-        let presets = map_zoom_presets();
-        assert!(presets[0] != presets[1]);
-        assert!(presets[1] != presets[2]);
-        assert!(presets[0] != presets[2]);
-    }
-
-    #[test]
     fn risk_color_midpoint_is_avg_of_endpoints() {
         let low = risk_color(0.0);
         let high = risk_color(1.0);
@@ -2721,13 +2868,6 @@ mod tests {
     }
 
     #[test]
-    fn map_zoom_presets_sorted_unique() {
-        let presets = map_zoom_presets();
-        assert!(presets[0] < presets[1]);
-        assert!(presets[1] < presets[2]);
-    }
-
-    #[test]
     fn risk_color_low_matches_constants() {
         let low = risk_color(0.0);
         assert_close(low.linear_r(), 0.2);
@@ -2741,12 +2881,6 @@ mod tests {
         assert_close(high.linear_r(), 0.9);
         assert_close(high.linear_g(), 0.25);
         assert_close(high.linear_b(), 0.2);
-    }
-
-    #[test]
-    fn map_zoom_presets_equal_constants() {
-        let presets = map_zoom_presets();
-        assert_eq!(presets, [0.6, 0.8, 1.0]);
     }
 
     #[test]
@@ -2764,12 +2898,6 @@ mod tests {
     }
 
     #[test]
-    fn map_zoom_presets_first_is_point_six() {
-        let presets = map_zoom_presets();
-        assert_close(presets[0], 0.6);
-    }
-
-    #[test]
     fn risk_color_low_blue_component_gt_red() {
         let low = risk_color(0.0);
         assert!(low.linear_b() > low.linear_r());
@@ -2779,12 +2907,6 @@ mod tests {
     fn risk_color_high_green_component_lt_blue() {
         let high = risk_color(1.0);
         assert!(high.linear_g() > high.linear_b());
-    }
-
-    #[test]
-    fn map_zoom_presets_second_is_point_eight() {
-        let presets = map_zoom_presets();
-        assert_close(presets[1], 0.8);
     }
 
     // Zone visibility tests

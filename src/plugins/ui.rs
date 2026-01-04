@@ -475,7 +475,7 @@ fn setup_hud(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn((
         MapUi,
         TextBundle::from_section(
-            "Map: G grid | R routes | T route labels | Y node labels | V reveal adj | A reveal all | C zoom",
+            "Map: G grid | R routes | T route labels | Y node labels | V reveal adj | A reveal all",
             TextStyle {
                 font: font.clone(),
                 font_size: 12.0,

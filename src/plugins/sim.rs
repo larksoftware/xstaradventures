@@ -652,7 +652,10 @@ fn scout_behavior(
                                 pirate_transform.translation.y,
                             );
                             behavior.add_pirate_contact(pirate_entity, pos, false);
-                            info!("Scout: Detected pirate ship at ({:.0}, {:.0})", pos.x, pos.y);
+                            info!(
+                                "Scout: Detected pirate ship at ({:.0}, {:.0})",
+                                pos.x, pos.y
+                            );
                         }
                     }
 
@@ -664,7 +667,10 @@ fn scout_behavior(
                                 base_transform.translation.y,
                             );
                             behavior.add_pirate_contact(base_entity, pos, true);
-                            info!("Scout: Detected pirate base at ({:.0}, {:.0})", pos.x, pos.y);
+                            info!(
+                                "Scout: Detected pirate base at ({:.0}, {:.0})",
+                                pos.x, pos.y
+                            );
                         }
                     }
 
@@ -715,10 +721,15 @@ fn scout_behavior(
                     }
 
                     // Transition to investigation phase
-                    let unidentified_count = behavior.contacts.iter()
+                    let unidentified_count = behavior
+                        .contacts
+                        .iter()
                         .filter(|c| matches!(c.status, crate::fleets::ContactStatus::Unidentified))
                         .count();
-                    info!("Scout: Beginning investigation of {} contacts", unidentified_count);
+                    info!(
+                        "Scout: Beginning investigation of {} contacts",
+                        unidentified_count
+                    );
                     behavior.begin_investigation();
                 }
             }
@@ -875,7 +886,10 @@ fn scout_zone_complete(
         // Find the gate's position
         for (entity, gate_transform, gate, gate_zone) in gates.iter() {
             if entity == gate_entity && gate_zone.0 == zone_id.0 {
-                info!("Scout: Traveling to gate (destination zone {})", gate.destination_zone);
+                info!(
+                    "Scout: Traveling to gate (destination zone {})",
+                    gate.destination_zone
+                );
                 behavior.target_gate = Some(gate_entity);
                 behavior.target_position = Some(Vec2::new(
                     gate_transform.translation.x,

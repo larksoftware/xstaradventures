@@ -754,13 +754,19 @@ mod tests {
         // Check for pirate ships in starter zone
         let mut pirate_query = world.query::<(&PirateShip, &ZoneId)>();
         for (_pirate, zone_id) in pirate_query.iter(&world) {
-            assert_ne!(zone_id.0, starter_zone_id, "Starter zone should have no pirates");
+            assert_ne!(
+                zone_id.0, starter_zone_id,
+                "Starter zone should have no pirates"
+            );
         }
 
         // Check for pirate bases in starter zone
         let mut base_query = world.query::<(&PirateBase, &ZoneId)>();
         for (_base, zone_id) in base_query.iter(&world) {
-            assert_ne!(zone_id.0, starter_zone_id, "Starter zone should have no pirate bases");
+            assert_ne!(
+                zone_id.0, starter_zone_id,
+                "Starter zone should have no pirate bases"
+            );
         }
     }
 
@@ -819,14 +825,20 @@ mod tests {
         apply_seed_world(&mut commands, &mut sector, 1337);
         queue.apply(&mut world);
 
-        let mut base_counts: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+        let mut base_counts: std::collections::HashMap<u32, usize> =
+            std::collections::HashMap::new();
         let mut base_query = world.query::<(&PirateBase, &ZoneId)>();
         for (_base, zone_id) in base_query.iter(&world) {
             *base_counts.entry(zone_id.0).or_insert(0) += 1;
         }
 
         for (zone_id, count) in base_counts {
-            assert!(count <= 1, "Zone {} has {} pirate bases, max is 1", zone_id, count);
+            assert!(
+                count <= 1,
+                "Zone {} has {} pirate bases, max is 1",
+                zone_id,
+                count
+            );
         }
     }
 
@@ -840,14 +852,20 @@ mod tests {
         apply_seed_world(&mut commands, &mut sector, 1337);
         queue.apply(&mut world);
 
-        let mut pirate_counts: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+        let mut pirate_counts: std::collections::HashMap<u32, usize> =
+            std::collections::HashMap::new();
         let mut pirate_query = world.query::<(&PirateShip, &ZoneId)>();
         for (_pirate, zone_id) in pirate_query.iter(&world) {
             *pirate_counts.entry(zone_id.0).or_insert(0) += 1;
         }
 
         for (zone_id, count) in pirate_counts {
-            assert!(count <= 5, "Zone {} has {} pirates, max is 5", zone_id, count);
+            assert!(
+                count <= 5,
+                "Zone {} has {} pirates, max is 5",
+                zone_id,
+                count
+            );
         }
     }
 
@@ -878,7 +896,8 @@ mod tests {
         let eligible_zone_count = sector.nodes.len() - safe_zones.len();
 
         // Count zones with pirates
-        let mut zones_with_pirates: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut zones_with_pirates: std::collections::HashSet<u32> =
+            std::collections::HashSet::new();
         let mut pirate_query = world.query::<(&PirateShip, &ZoneId)>();
         for (_pirate, zone_id) in pirate_query.iter(&world) {
             zones_with_pirates.insert(zone_id.0);
