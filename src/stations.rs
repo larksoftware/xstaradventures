@@ -5,6 +5,8 @@ pub enum StationKind {
     MiningOutpost,
     FuelDepot,
     SensorStation,
+    Shipyard,
+    Refinery,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
@@ -61,11 +63,163 @@ pub struct StationProduction {
     pub ore_capacity: f32,
 }
 
+/// A refinery job converting ore to fuel
+#[derive(Component, Debug, Clone)]
+#[allow(dead_code)]
+pub struct RefineryJob {
+    pub ore_in: u32,
+    pub fuel_out: f32,
+    pub remaining_seconds: f32,
+}
+
+#[allow(dead_code)]
+impl RefineryJob {
+    /// Create a new refinery job
+    pub fn new(ore_in: u32) -> Self {
+        // 2 ore -> 1 fuel, takes 60 seconds
+        let fuel_out = ore_in as f32 / 2.0;
+        Self {
+            ore_in,
+            fuel_out,
+            remaining_seconds: 60.0,
+        }
+    }
+
+    /// Update job timer, returns true if complete
+    pub fn tick(&mut self, delta_seconds: f32) -> bool {
+        self.remaining_seconds -= delta_seconds;
+        self.remaining_seconds <= 0.0
+    }
+}
+
+/// A shipyard job building a scout
+#[derive(Component, Debug, Clone)]
+#[allow(dead_code)]
+pub struct ShipyardJob {
+    pub ore_in: u32,
+    pub fuel_in: f32,
+    pub remaining_seconds: f32,
+}
+
+#[allow(dead_code)]
+impl ShipyardJob {
+    /// Create a new shipyard job for building a scout
+    pub fn new() -> Self {
+        Self {
+            ore_in: 30,
+            fuel_in: 15.0,
+            remaining_seconds: 120.0,
+        }
+    }
+
+    /// Update job timer, returns true if complete
+    pub fn tick(&mut self, delta_seconds: f32) -> bool {
+        self.remaining_seconds -= delta_seconds;
+        self.remaining_seconds <= 0.0
+    }
+}
+
+impl Default for ShipyardJob {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Storage for refined fuel at a refinery
+#[derive(Component, Debug, Clone, Default)]
+#[allow(dead_code)]
+pub struct RefineryStorage {
+    pub fuel: f32,
+    pub fuel_capacity: f32,
+}
+
+#[allow(dead_code)]
+impl RefineryStorage {
+    /// Create new refinery storage with default capacity
+    pub fn new() -> Self {
+        Self {
+            fuel: 0.0,
+            fuel_capacity: 50.0,
+        }
+    }
+
+    /// Add fuel to storage, returns amount actually added
+    pub fn add_fuel(&mut self, amount: f32) -> f32 {
+        let free = (self.fuel_capacity - self.fuel).max(0.0);
+        let added = amount.min(free);
+        self.fuel += added;
+        added
+    }
+
+    /// Remove fuel from storage, returns amount actually removed
+    pub fn remove_fuel(&mut self, amount: f32) -> f32 {
+        let removed = amount.min(self.fuel);
+        self.fuel -= removed;
+        removed
+    }
+
+    /// Get available space
+    pub fn free_space(&self) -> f32 {
+        (self.fuel_capacity - self.fuel).max(0.0)
+    }
+}
+
+/// Storage for completed scouts at a shipyard
+#[derive(Component, Debug, Clone, Default)]
+#[allow(dead_code)]
+pub struct ShipyardStorage {
+    pub ready_scouts: u8,
+    pub capacity: u8,
+}
+
+#[allow(dead_code)]
+impl ShipyardStorage {
+    /// Create new shipyard storage with default capacity
+    pub fn new() -> Self {
+        Self {
+            ready_scouts: 0,
+            capacity: 3,
+        }
+    }
+
+    /// Add a completed scout, returns true if successful
+    pub fn add_scout(&mut self) -> bool {
+        if self.ready_scouts < self.capacity {
+            self.ready_scouts += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove a scout for deployment, returns true if successful
+    pub fn remove_scout(&mut self) -> bool {
+        if self.ready_scouts > 0 {
+            self.ready_scouts -= 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Check if storage is full
+    pub fn is_full(&self) -> bool {
+        self.ready_scouts >= self.capacity
+    }
+
+    /// Get number of available slots
+    pub fn free_slots(&self) -> u8 {
+        self.capacity.saturating_sub(self.ready_scouts)
+    }
+}
+
 pub fn station_build_time_seconds(kind: StationKind) -> f32 {
     match kind {
         StationKind::MiningOutpost => 180.0,
         StationKind::FuelDepot => 135.0,
         StationKind::SensorStation => 90.0,
+        StationKind::Shipyard => 240.0,
+        StationKind::Refinery => 200.0,
     }
 }
 
@@ -74,6 +228,8 @@ pub fn station_fuel_capacity(kind: StationKind) -> f32 {
         StationKind::MiningOutpost => 30.0,
         StationKind::FuelDepot => 120.0,
         StationKind::SensorStation => 40.0,
+        StationKind::Shipyard => 50.0,
+        StationKind::Refinery => 60.0,
     }
 }
 
@@ -82,6 +238,8 @@ pub fn station_fuel_burn_per_minute(kind: StationKind) -> f32 {
         StationKind::MiningOutpost => 0.6,
         StationKind::FuelDepot => 0.3,
         StationKind::SensorStation => 0.45,
+        StationKind::Shipyard => 0.5,
+        StationKind::Refinery => 0.4,
     }
 }
 
@@ -90,6 +248,8 @@ pub fn station_ore_capacity(kind: StationKind) -> f32 {
         StationKind::MiningOutpost => 80.0,
         StationKind::FuelDepot => 0.0,
         StationKind::SensorStation => 0.0,
+        StationKind::Shipyard => 100.0,
+        StationKind::Refinery => 80.0,
     }
 }
 
@@ -98,6 +258,8 @@ pub fn station_ore_production_per_minute(kind: StationKind) -> f32 {
         StationKind::MiningOutpost => 3.5,
         StationKind::FuelDepot => 0.0,
         StationKind::SensorStation => 0.0,
+        StationKind::Shipyard => 0.0,
+        StationKind::Refinery => 0.0,
     }
 }
 
@@ -448,5 +610,230 @@ mod tests {
             super::station_ore_production_per_minute(StationKind::SensorStation),
             0.0
         );
+    }
+
+    // =============================================================================
+    // Shipyard and Refinery tests (TDD - write failing tests first)
+    // =============================================================================
+
+    #[test]
+    fn shipyard_build_time_is_240_seconds() {
+        assert_eq!(station_build_time_seconds(StationKind::Shipyard), 240.0);
+    }
+
+    #[test]
+    fn refinery_build_time_is_200_seconds() {
+        assert_eq!(station_build_time_seconds(StationKind::Refinery), 200.0);
+    }
+
+    #[test]
+    fn shipyard_fuel_capacity_is_50() {
+        assert_eq!(super::station_fuel_capacity(StationKind::Shipyard), 50.0);
+    }
+
+    #[test]
+    fn refinery_fuel_capacity_is_60() {
+        assert_eq!(super::station_fuel_capacity(StationKind::Refinery), 60.0);
+    }
+
+    #[test]
+    fn shipyard_fuel_burn_per_minute() {
+        assert_eq!(
+            super::station_fuel_burn_per_minute(StationKind::Shipyard),
+            0.5
+        );
+    }
+
+    #[test]
+    fn refinery_fuel_burn_per_minute() {
+        assert_eq!(
+            super::station_fuel_burn_per_minute(StationKind::Refinery),
+            0.4
+        );
+    }
+
+    #[test]
+    fn shipyard_ore_capacity_is_100() {
+        assert_eq!(super::station_ore_capacity(StationKind::Shipyard), 100.0);
+    }
+
+    #[test]
+    fn refinery_ore_capacity_is_80() {
+        assert_eq!(super::station_ore_capacity(StationKind::Refinery), 80.0);
+    }
+
+    #[test]
+    fn shipyard_no_ore_production() {
+        assert_eq!(
+            super::station_ore_production_per_minute(StationKind::Shipyard),
+            0.0
+        );
+    }
+
+    #[test]
+    fn refinery_no_ore_production() {
+        assert_eq!(
+            super::station_ore_production_per_minute(StationKind::Refinery),
+            0.0
+        );
+    }
+
+    // =============================================================================
+    // Job model tests
+    // =============================================================================
+
+    #[test]
+    fn refinery_job_new_calculates_fuel_output() {
+        let job = super::RefineryJob::new(20);
+        assert_eq!(job.ore_in, 20);
+        assert!((job.fuel_out - 10.0).abs() < f32::EPSILON);
+        assert!((job.remaining_seconds - 60.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn refinery_job_tick_decreases_time() {
+        let mut job = super::RefineryJob::new(10);
+        let complete = job.tick(30.0);
+        assert!(!complete);
+        assert!((job.remaining_seconds - 30.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn refinery_job_tick_returns_true_when_complete() {
+        let mut job = super::RefineryJob::new(10);
+        let complete = job.tick(60.0);
+        assert!(complete);
+    }
+
+    #[test]
+    fn shipyard_job_new_has_correct_values() {
+        let job = super::ShipyardJob::new();
+        assert_eq!(job.ore_in, 30);
+        assert!((job.fuel_in - 15.0).abs() < f32::EPSILON);
+        assert!((job.remaining_seconds - 120.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn shipyard_job_tick_decreases_time() {
+        let mut job = super::ShipyardJob::new();
+        let complete = job.tick(60.0);
+        assert!(!complete);
+        assert!((job.remaining_seconds - 60.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn shipyard_job_tick_returns_true_when_complete() {
+        let mut job = super::ShipyardJob::new();
+        let complete = job.tick(120.0);
+        assert!(complete);
+    }
+
+    #[test]
+    fn shipyard_job_default_same_as_new() {
+        let job1 = super::ShipyardJob::new();
+        let job2 = super::ShipyardJob::default();
+        assert_eq!(job1.ore_in, job2.ore_in);
+        assert!((job1.fuel_in - job2.fuel_in).abs() < f32::EPSILON);
+    }
+
+    // =============================================================================
+    // Storage tests
+    // =============================================================================
+
+    #[test]
+    fn refinery_storage_new_has_correct_capacity() {
+        let storage = super::RefineryStorage::new();
+        assert!((storage.fuel_capacity - 50.0).abs() < f32::EPSILON);
+        assert!(storage.fuel.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn refinery_storage_add_fuel_respects_capacity() {
+        let mut storage = super::RefineryStorage::new();
+        let added = storage.add_fuel(30.0);
+        assert!((added - 30.0).abs() < f32::EPSILON);
+        assert!((storage.fuel - 30.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn refinery_storage_add_fuel_cannot_exceed_capacity() {
+        let mut storage = super::RefineryStorage::new();
+        storage.add_fuel(40.0);
+        let added = storage.add_fuel(20.0);
+        assert!((added - 10.0).abs() < f32::EPSILON);
+        assert!((storage.fuel - 50.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn refinery_storage_remove_fuel() {
+        let mut storage = super::RefineryStorage::new();
+        storage.add_fuel(30.0);
+        let removed = storage.remove_fuel(20.0);
+        assert!((removed - 20.0).abs() < f32::EPSILON);
+        assert!((storage.fuel - 10.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn refinery_storage_free_space() {
+        let mut storage = super::RefineryStorage::new();
+        storage.add_fuel(30.0);
+        assert!((storage.free_space() - 20.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn shipyard_storage_new_has_correct_capacity() {
+        let storage = super::ShipyardStorage::new();
+        assert_eq!(storage.capacity, 3);
+        assert_eq!(storage.ready_scouts, 0);
+    }
+
+    #[test]
+    fn shipyard_storage_add_scout() {
+        let mut storage = super::ShipyardStorage::new();
+        assert!(storage.add_scout());
+        assert_eq!(storage.ready_scouts, 1);
+    }
+
+    #[test]
+    fn shipyard_storage_add_scout_respects_capacity() {
+        let mut storage = super::ShipyardStorage::new();
+        assert!(storage.add_scout());
+        assert!(storage.add_scout());
+        assert!(storage.add_scout());
+        assert!(!storage.add_scout()); // Full
+        assert_eq!(storage.ready_scouts, 3);
+    }
+
+    #[test]
+    fn shipyard_storage_remove_scout() {
+        let mut storage = super::ShipyardStorage::new();
+        storage.add_scout();
+        storage.add_scout();
+        assert!(storage.remove_scout());
+        assert_eq!(storage.ready_scouts, 1);
+    }
+
+    #[test]
+    fn shipyard_storage_remove_scout_empty() {
+        let mut storage = super::ShipyardStorage::new();
+        assert!(!storage.remove_scout());
+    }
+
+    #[test]
+    fn shipyard_storage_is_full() {
+        let mut storage = super::ShipyardStorage::new();
+        assert!(!storage.is_full());
+        storage.add_scout();
+        storage.add_scout();
+        storage.add_scout();
+        assert!(storage.is_full());
+    }
+
+    #[test]
+    fn shipyard_storage_free_slots() {
+        let mut storage = super::ShipyardStorage::new();
+        assert_eq!(storage.free_slots(), 3);
+        storage.add_scout();
+        assert_eq!(storage.free_slots(), 2);
     }
 }

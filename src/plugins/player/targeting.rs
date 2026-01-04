@@ -7,7 +7,7 @@ use crate::pirates::{PirateBase, PirateShip};
 use crate::plugins::core::{InputBindings, ViewMode};
 use crate::ships::{Ship, ShipKind};
 use crate::stations::Station;
-use crate::world::{JumpGate, SystemNode, ZoneId};
+use crate::world::{Identified, JumpGate, SystemNode, ZoneId};
 
 use super::components::{NearbyTargets, PlayerControl};
 
@@ -24,15 +24,16 @@ pub fn view_is_world(view: Res<ViewMode>) -> bool {
 // =============================================================================
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
 pub fn scan_nearby_entities(
     mut targets: ResMut<NearbyTargets>,
     player_query: Query<(&Transform, &ZoneId), With<PlayerControl>>,
-    stations: Query<(Entity, &Transform, &Name, Option<&ZoneId>), With<Station>>,
-    ore_nodes: Query<(Entity, &Transform, Option<&ZoneId>), With<OreNode>>,
-    pirates: Query<(Entity, &Transform, Option<&ZoneId>), With<PirateShip>>,
-    pirate_bases: Query<(Entity, &Transform, Option<&ZoneId>), With<PirateBase>>,
-    ships: Query<(Entity, &Transform, &Ship, Option<&ZoneId>), Without<PlayerControl>>,
-    jump_gates: Query<(Entity, &Transform, &JumpGate, Option<&ZoneId>)>,
+    stations: Query<(Entity, &Transform, &Name, Option<&ZoneId>, Option<&Identified>), With<Station>>,
+    ore_nodes: Query<(Entity, &Transform, Option<&ZoneId>, Option<&Identified>), With<OreNode>>,
+    pirates: Query<(Entity, &Transform, Option<&ZoneId>, Option<&Identified>), With<PirateShip>>,
+    pirate_bases: Query<(Entity, &Transform, Option<&ZoneId>, Option<&Identified>), With<PirateBase>>,
+    ships: Query<(Entity, &Transform, &Ship, Option<&ZoneId>, Option<&Identified>), Without<PlayerControl>>,
+    jump_gates: Query<(Entity, &Transform, &JumpGate, Option<&ZoneId>, Option<&Identified>)>,
 ) {
     // Verify player exists and has a zone
     let Ok((player_transform, player_zone)) = player_query.single() else {
@@ -51,45 +52,59 @@ pub fn scan_nearby_entities(
     targets.entities.clear();
 
     // Scan all stations in player's zone
-    for (entity, transform, name, zone) in stations.iter() {
+    for (entity, transform, name, zone, identified) in stations.iter() {
         if zone.is_some_and(|z| z.0 == player_zone.0) {
             let pos = Vec2::new(transform.translation.x, transform.translation.y);
-            targets.entities.push((entity, pos, name.to_string()));
+            let label = if identified.is_some() {
+                name.to_string()
+            } else {
+                "[?] Unknown Contact".to_string()
+            };
+            targets.entities.push((entity, pos, label));
         }
     }
 
     // Scan all ore nodes in player's zone
-    for (entity, transform, zone) in ore_nodes.iter() {
+    for (entity, transform, zone, identified) in ore_nodes.iter() {
         if zone.is_some_and(|z| z.0 == player_zone.0) {
             let pos = Vec2::new(transform.translation.x, transform.translation.y);
-            targets
-                .entities
-                .push((entity, pos, "[o] Asteroid".to_string()));
+            let label = if identified.is_some() {
+                "[o] Asteroid".to_string()
+            } else {
+                "[?] Unknown Contact".to_string()
+            };
+            targets.entities.push((entity, pos, label));
         }
     }
 
     // Scan all pirates in player's zone
-    for (entity, transform, zone) in pirates.iter() {
+    for (entity, transform, zone, identified) in pirates.iter() {
         if zone.is_some_and(|z| z.0 == player_zone.0) {
             let pos = Vec2::new(transform.translation.x, transform.translation.y);
-            targets
-                .entities
-                .push((entity, pos, "[!] Marauder".to_string()));
+            let label = if identified.is_some() {
+                "[!] Marauder".to_string()
+            } else {
+                "[?] Unknown Contact".to_string()
+            };
+            targets.entities.push((entity, pos, label));
         }
     }
 
     // Scan all pirate bases in player's zone
-    for (entity, transform, zone) in pirate_bases.iter() {
+    for (entity, transform, zone, identified) in pirate_bases.iter() {
         if zone.is_some_and(|z| z.0 == player_zone.0) {
             let pos = Vec2::new(transform.translation.x, transform.translation.y);
-            targets
-                .entities
-                .push((entity, pos, "[!] Raider Den".to_string()));
+            let label = if identified.is_some() {
+                "[!] Raider Den".to_string()
+            } else {
+                "[?] Unknown Contact".to_string()
+            };
+            targets.entities.push((entity, pos, label));
         }
     }
 
-    // Scan all other ships in player's zone
-    for (entity, transform, ship, zone) in ships.iter() {
+    // Scan all other ships in player's zone (always identified - friendly ships)
+    for (entity, transform, ship, zone, _identified) in ships.iter() {
         if zone.is_some_and(|z| z.0 == player_zone.0) {
             let pos = Vec2::new(transform.translation.x, transform.translation.y);
             let label = match ship.kind {
@@ -103,10 +118,14 @@ pub fn scan_nearby_entities(
     }
 
     // Scan all jump gates in player's zone
-    for (entity, transform, gate, zone) in jump_gates.iter() {
+    for (entity, transform, gate, zone, identified) in jump_gates.iter() {
         if zone.is_some_and(|z| z.0 == player_zone.0) {
             let pos = Vec2::new(transform.translation.x, transform.translation.y);
-            let label = format!("[>] Rift Gate -> {}", gate.destination_zone);
+            let label = if identified.is_some() {
+                format!("[>] Rift Gate -> {}", gate.destination_zone)
+            } else {
+                "[?] Unknown Contact".to_string()
+            };
             targets.entities.push((entity, pos, label));
         }
     }

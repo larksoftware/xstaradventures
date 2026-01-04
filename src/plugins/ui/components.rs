@@ -71,6 +71,10 @@ pub struct ContactItem {
     pub index: usize,
 }
 
+/// Marker for empty state text in Contacts panel
+#[derive(Component)]
+pub struct ContactsEmptyText;
+
 // =============================================================================
 // Intel Panel Components
 // =============================================================================
@@ -117,6 +121,60 @@ pub struct FleetEmptyText;
 /// Marker for the divider between fleet list and detail
 #[derive(Component)]
 pub struct FleetDetailDivider;
+
+// =============================================================================
+// Docking Menu Components
+// =============================================================================
+
+/// Root marker for the docking menu panel
+#[derive(Component)]
+pub struct DockingMenuRoot;
+
+/// Text showing station name and type
+#[derive(Component)]
+pub struct DockingMenuTitle;
+
+/// Text showing station status
+#[derive(Component)]
+pub struct DockingMenuStatus;
+
+/// Container for job progress section
+#[derive(Component)]
+pub struct DockingMenuJobSection;
+
+/// Text showing current job progress
+#[derive(Component)]
+pub struct DockingMenuJobText;
+
+/// Cancel job button
+#[derive(Component)]
+pub struct DockingMenuCancelButton;
+
+/// Build Scout button (Shipyard)
+#[derive(Component)]
+pub struct DockingMenuBuildScoutButton;
+
+/// Convert ore options (Refinery)
+#[derive(Component)]
+pub struct DockingMenuConvertButton {
+    pub ore_amount: u32,
+}
+
+/// Container for collect section (Refinery)
+#[derive(Component)]
+pub struct DockingMenuCollectSection;
+
+/// Collect fuel button
+#[derive(Component)]
+pub struct DockingMenuCollectButton;
+
+/// Text showing player cargo
+#[derive(Component)]
+pub struct DockingMenuCargoText;
+
+/// Undock button
+#[derive(Component)]
+pub struct DockingMenuUndockButton;
 
 // =============================================================================
 // Debug Panel Components

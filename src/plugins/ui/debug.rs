@@ -154,7 +154,9 @@ pub fn update_debug_panel(
                     body.push_str("  V   : reveal adjacent\n");
                     body.push_str("  U   : reveal all\n");
                     body.push_str("  Z   : clear reveals\n");
-                    body.push_str("  B   : spawn station\n");
+                    body.push_str("  B   : spawn fuel depot\n");
+                    body.push_str("  1   : spawn refinery\n");
+                    body.push_str("  2   : spawn shipyard\n");
                     body.push_str("  S   : spawn scout\n");
                     body.push_str("  P   : spawn pirate\n");
                     body.push_str("  I   : refresh intel\n");

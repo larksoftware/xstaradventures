@@ -11,6 +11,7 @@ mod stations;
 use bevy::prelude::*;
 
 use crate::plugins::core::SimConfig;
+use crate::plugins::player::process_jump_transition;
 use crate::world::Sector;
 
 // Re-export public items
@@ -39,7 +40,10 @@ impl Plugin for SimPlugin {
                     stations::station_crisis_stub,
                     stations::station_lifecycle,
                     stations::log_station_crisis_changes,
-                    scouts::scout_behavior,
+                    stations::shipyard_job_progress,
+                    stations::refinery_job_progress,
+                    stations::station_job_loss_on_fail.after(stations::station_lifecycle),
+                    scouts::scout_behavior.after(process_jump_transition),
                     ore::spawn_ore_at_revealed_nodes,
                     boundary::check_boundary_warnings,
                     pirates::pirate_launches,

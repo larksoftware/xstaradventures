@@ -4,14 +4,14 @@ use bevy::prelude::*;
 
 use crate::compat::SpatialBundle;
 use crate::ore::{mine_amount, OreKind, OreNode};
-use crate::pirates::PirateShip;
+use crate::pirates::{PirateBase, PirateShip};
 use crate::plugins::core::{EventLog, InputBindings};
 use crate::ships::{Cargo, Ship};
 use crate::stations::{
     station_build_time_seconds, station_fuel_capacity, station_ore_capacity, Station, StationBuild,
     StationCrisisLog, StationKind, StationProduction, StationState,
 };
-use crate::world::{SystemNode, ZoneId};
+use crate::world::{Identified, JumpGate, SystemNode, ZoneId};
 
 use super::components::PlayerControl;
 
@@ -71,7 +71,7 @@ pub fn player_mining(
     if let Ok((_entity, _transform, mut ore)) = ore_nodes.get_mut(target_entity) {
         let _mined = match ore.kind {
             OreKind::CommonOre => {
-                let free_capacity = (cargo.capacity - cargo.common_ore).max(0.0);
+                let free_capacity = cargo.ore_free_space() as f32;
                 let amount = mine_amount(
                     ore.remaining,
                     ore.rate_per_second,
@@ -80,7 +80,7 @@ pub fn player_mining(
                 );
                 if amount > 0.0 {
                     ore.remaining -= amount;
-                    cargo.common_ore += amount;
+                    cargo.add_ore(amount as u32);
                 }
                 amount
             }
@@ -131,8 +131,8 @@ pub fn player_build_outpost(
         }
     };
 
-    let cost = 18.0;
-    if !can_build_outpost(cargo.common_ore, cost) {
+    let cost = 18;
+    if !can_build_outpost(cargo.ore, cost) {
         return;
     }
 
@@ -199,7 +199,7 @@ pub fn player_build_outpost(
         )),
     ));
 
-    cargo.common_ore -= cost;
+    cargo.remove_ore(cost);
     log.push(format!("Outpost deployed at zone {}", node.id));
 }
 
@@ -249,14 +249,14 @@ pub fn player_refuel_station(
             refueled = did_refuel;
         }
 
-        if cargo.common_ore > 0.0 {
+        if cargo.ore > 0 {
             if let Some(mut production) = production_opt {
-                let available = cargo.common_ore.min(ore_transfer);
+                let available = (cargo.ore as f32).min(ore_transfer);
                 let free_capacity = (production.ore_capacity - production.ore).max(0.0);
                 let transferred = available.min(free_capacity);
 
                 if transferred > 0.0 {
-                    cargo.common_ore -= transferred;
+                    cargo.remove_ore(transferred as u32);
                     production.ore += transferred;
                     supplied_ore = true;
                 }
@@ -314,11 +314,51 @@ pub fn player_fire(
     }
 }
 
+/// Range at which player automatically identifies contacts
+const PLAYER_IDENTIFY_RANGE: f32 = 150.0;
+
+/// Automatically identifies entities when player gets close enough.
+#[allow(clippy::type_complexity)]
+pub fn player_identify_nearby(
+    mut commands: Commands,
+    player_query: Query<&Transform, With<PlayerControl>>,
+    unidentified: Query<
+        (Entity, &Transform),
+        (
+            Without<Identified>,
+            Or<(
+                With<OreNode>,
+                With<Station>,
+                With<PirateShip>,
+                With<PirateBase>,
+                With<JumpGate>,
+            )>,
+        ),
+    >,
+) {
+    let player_transform = match player_query.single() {
+        Ok(value) => value,
+        Err(_) => return,
+    };
+
+    let player_pos = Vec2::new(
+        player_transform.translation.x,
+        player_transform.translation.y,
+    );
+
+    for (entity, transform) in unidentified.iter() {
+        let entity_pos = Vec2::new(transform.translation.x, transform.translation.y);
+        if entity_pos.distance(player_pos) <= PLAYER_IDENTIFY_RANGE {
+            commands.entity(entity).insert(Identified);
+        }
+    }
+}
+
 // =============================================================================
 // Helper Functions
 // =============================================================================
 
-pub fn can_build_outpost(ore: f32, cost: f32) -> bool {
+pub fn can_build_outpost(ore: u32, cost: u32) -> bool {
     ore >= cost
 }
 
@@ -365,8 +405,8 @@ mod tests {
 
     #[test]
     fn can_build_outpost_requires_enough_ore() {
-        assert!(can_build_outpost(18.0, 18.0));
-        assert!(!can_build_outpost(10.0, 18.0));
+        assert!(can_build_outpost(18, 18));
+        assert!(!can_build_outpost(10, 18));
     }
 
     #[test]

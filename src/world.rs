@@ -32,6 +32,11 @@ pub struct JumpTransition {
     pub remaining_seconds: f32,
 }
 
+/// Marker for entities that have been identified by player or scouts.
+/// Unidentified entities show as "Unknown Contact" in the contacts list.
+#[derive(Component, Clone, Debug, Default)]
+pub struct Identified;
+
 #[derive(Resource, Default)]
 pub struct Sector {
     pub nodes: Vec<SystemNode>,

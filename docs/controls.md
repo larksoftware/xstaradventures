@@ -8,8 +8,8 @@ This document lists the current bootstrap controls and what they affect.
 - `A` / `D`: rotate ship left/right.
 - `Space`: apply braking thrust (decelerates toward zero; disabled while W/S held).
 - `N`: engage autopilot to selected target (press Tab first to select; movement keys disengage).
-- `F`: interact (mine ore, refuel station, transfer ore, build outpost, activate jump gate).
-- `H`: toggle home beacon arrow (points to nearest revealed node).
+- `J`: interact (mine ore, refuel station, transfer ore, build outpost, activate jump gate).
+- `H`: center camera on player ship.
 - Left Mouse Button: fire weapon at pirates.
 - `Tab`: cycle through nearby tactical targets (shows arrow when far, circle when near).
 - `,` / `.`: decrease/increase scout fleet risk tolerance.
@@ -20,8 +20,47 @@ This document lists the current bootstrap controls and what they affect.
 
 **Jump Gates**: Gates connect zones and appear along routes between nodes. To jump:
 1. Fly near a jump gate (within 25 units).
-2. Press F to activate. Costs 5 fuel.
+2. Press J to activate. Costs 5 fuel.
 3. After a brief transition, you arrive in the destination zone.
+
+## Docking & Interactions
+
+All interactions use proximity - fly close to something and press `J` to interact. The action depends on what's nearby:
+
+| Target | Range | Action |
+|--------|-------|--------|
+| Asteroid (Ore Node) | 24 | **Hold J** to mine. CommonOre fills cargo; FuelOre refuels ship directly. |
+| Shipyard / Refinery | 22 | **Press J** to dock and open the station menu. |
+| Other Station | 22 | **Press J** to transfer: fuel from ship → station, ore from cargo → station storage. |
+| System Node | 26 | **Press J** to build Mining Outpost (costs 18 ore). Must have no station nearby. |
+| Jump Gate | 25 | **Press J** to jump to destination zone (costs 5 fuel). |
+
+### Station Menu (Shipyard / Refinery)
+
+When docked at a Shipyard or Refinery, a menu appears with available actions:
+
+**Shipyard Menu**:
+- Build Scout (15 ore, 120s) - Spawns a scout ship when complete
+- Cancel job (50% ore refund)
+- Undock
+
+**Refinery Menu**:
+- Convert 5 ore → 10 fuel (60s)
+- Convert 10 ore → 20 fuel (90s)
+- Collect converted fuel (transfers to your cargo)
+- Cancel job (50% ore refund)
+- Undock
+
+**Job Rules**:
+- Jobs pause when station is Strained or Failing (low fuel)
+- Jobs are lost (no refund) if station becomes Failed
+- Press Escape or click Undock to leave the station menu
+
+**Tips**:
+- Use autopilot (Tab to select, N to engage) to fly within docking range automatically.
+- The target reticle changes from an arrow (far) to a circle (near/docked) when in range.
+- Mining is continuous while holding J; other interactions trigger once per press.
+- Station resupply transfers 10 fuel and 8 ore per interaction.
 
 ## Simulation Controls
 
@@ -45,6 +84,8 @@ Press `F3` to open/close the debug window. All debug commands require **Shift** 
 - `Shift+U`: reveal all nodes.
 - `Shift+Z`: clear reveals.
 - `Shift+B`: spawn FuelDepot.
+- `Shift+1`: spawn Refinery.
+- `Shift+2`: spawn Shipyard.
 - `Shift+S`: spawn Scout.
 - `Shift+P`: spawn Pirate.
 

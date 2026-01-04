@@ -30,10 +30,10 @@ pub enum ScoutPhase {
 /// Contact status for scout investigation
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ContactStatus {
-    /// Detected but not yet identified
-    Unidentified,
-    /// Fully identified (scout got within range)
-    Identified,
+    /// Detected but not yet investigated by scout
+    Pending,
+    /// Investigated (scout got within range)
+    Investigated,
     /// Skipped (e.g., ship type - potentially hostile)
     Skipped,
 }
@@ -60,12 +60,12 @@ pub struct ScoutContact {
 }
 
 impl ScoutContact {
-    pub fn new_unidentified(entity: Entity, position: Vec2) -> Self {
+    pub fn new_pending(entity: Entity, position: Vec2) -> Self {
         Self {
             entity,
             position,
             contact_type: ContactType::Unknown,
-            status: ContactStatus::Unidentified,
+            status: ContactStatus::Pending,
         }
     }
 
@@ -78,7 +78,7 @@ impl ScoutContact {
             } else {
                 ContactType::PirateShip
             },
-            status: ContactStatus::Identified,
+            status: ContactStatus::Investigated,
         }
     }
 }
@@ -206,7 +206,7 @@ impl ScoutBehavior {
     /// Add an unidentified contact discovered during scan
     pub fn add_contact(&mut self, entity: Entity, position: Vec2) {
         self.contacts
-            .push(ScoutContact::new_unidentified(entity, position));
+            .push(ScoutContact::new_pending(entity, position));
     }
 
     /// Add a pirate contact (identified immediately during scan)
@@ -219,7 +219,7 @@ impl ScoutBehavior {
     /// Get the next unidentified non-ship contact to investigate
     pub fn next_contact_to_investigate(&self) -> Option<&ScoutContact> {
         self.contacts.iter().find(|c| {
-            matches!(c.status, ContactStatus::Unidentified)
+            matches!(c.status, ContactStatus::Pending)
                 && !matches!(c.contact_type, ContactType::Ship | ContactType::PirateShip)
         })
     }
@@ -240,7 +240,7 @@ impl ScoutBehavior {
     pub fn identify_contact(&mut self, entity: Entity, contact_type: ContactType) {
         if let Some(contact) = self.contacts.iter_mut().find(|c| c.entity == entity) {
             contact.contact_type = contact_type;
-            contact.status = ContactStatus::Identified;
+            contact.status = ContactStatus::Investigated;
         }
     }
 
@@ -257,7 +257,7 @@ impl ScoutBehavior {
     pub fn all_contacts_processed(&self) -> bool {
         self.contacts
             .iter()
-            .all(|c| matches!(c.status, ContactStatus::Identified | ContactStatus::Skipped))
+            .all(|c| matches!(c.status, ContactStatus::Investigated | ContactStatus::Skipped))
     }
 
     /// Transition to investigation phase after scan completes
@@ -315,7 +315,8 @@ impl ScoutBehavior {
         self.gates_to_explore.is_empty() && matches!(self.phase, ScoutPhase::Scanning)
     }
 
-    /// Start jumping through a gate
+    /// Start jumping through a gate (used by tests, scouts use JumpTransition component)
+    #[allow(dead_code)]
     pub fn start_jump(&mut self, destination_zone: u32, transition_seconds: f32) {
         self.phase = ScoutPhase::Jumping;
         self.jump_destination = Some(destination_zone);
@@ -703,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_reveals_contacts_as_unidentified() {
+    fn scan_reveals_contacts_as_pending() {
         let mut scout = ScoutBehavior::new(100, RiskTolerance::Balanced);
         let entity = Entity::from_bits(1);
         let pos = Vec2::new(100.0, 200.0);
@@ -711,7 +712,7 @@ mod tests {
         scout.add_contact(entity, pos);
 
         assert_eq!(scout.contacts.len(), 1);
-        assert_eq!(scout.contacts[0].status, ContactStatus::Unidentified);
+        assert_eq!(scout.contacts[0].status, ContactStatus::Pending);
         assert_eq!(scout.contacts[0].contact_type, ContactType::Unknown);
     }
 
@@ -724,7 +725,7 @@ mod tests {
         scout.add_pirate_contact(pirate_entity, pos, false);
 
         assert_eq!(scout.contacts.len(), 1);
-        assert_eq!(scout.contacts[0].status, ContactStatus::Identified);
+        assert_eq!(scout.contacts[0].status, ContactStatus::Investigated);
         assert_eq!(scout.contacts[0].contact_type, ContactType::PirateShip);
         assert_eq!(scout.pirates_detected, 1);
     }
@@ -777,7 +778,7 @@ mod tests {
         scout.add_contact(entity, Vec2::new(100.0, 100.0));
         scout.identify_contact(entity, ContactType::Asteroid);
 
-        assert_eq!(scout.contacts[0].status, ContactStatus::Identified);
+        assert_eq!(scout.contacts[0].status, ContactStatus::Investigated);
         assert_eq!(scout.contacts[0].contact_type, ContactType::Asteroid);
     }
 

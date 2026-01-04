@@ -64,6 +64,7 @@ impl Plugin for Render2DPlugin {
                     map::draw_routes,
                     map::update_route_labels,
                     map::update_node_labels,
+                    map::update_station_map_labels,
                     map::update_hovered_node,
                     sync_view_entities,
                 )

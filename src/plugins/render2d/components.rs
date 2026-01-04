@@ -41,6 +41,9 @@ pub struct RouteLabel;
 pub struct NodeLabel;
 
 #[derive(Component)]
+pub struct StationMapLabel;
+
+#[derive(Component)]
 pub struct NodeVisualMarker;
 
 // =============================================================================
@@ -122,6 +125,8 @@ pub fn station_kind_short(kind: crate::stations::StationKind) -> &'static str {
         crate::stations::StationKind::MiningOutpost => "M",
         crate::stations::StationKind::FuelDepot => "F",
         crate::stations::StationKind::SensorStation => "S",
+        crate::stations::StationKind::Shipyard => "Y",
+        crate::stations::StationKind::Refinery => "R",
     }
 }
 

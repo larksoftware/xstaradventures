@@ -39,8 +39,68 @@ pub struct Ship {
 
 #[derive(Component, Debug, Clone, Copy)]
 pub struct Cargo {
-    pub common_ore: f32,
-    pub capacity: f32,
+    pub ore: u32,
+    pub ore_capacity: u32,
+    #[allow(dead_code)]
+    pub fuel: f32,
+    #[allow(dead_code)]
+    pub fuel_capacity: f32,
+}
+
+impl Default for Cargo {
+    fn default() -> Self {
+        Self {
+            ore: 0,
+            ore_capacity: 50,
+            fuel: 0.0,
+            fuel_capacity: 100.0,
+        }
+    }
+}
+
+impl Cargo {
+    /// Add ore up to capacity. Returns the amount actually added.
+    pub fn add_ore(&mut self, amount: u32) -> u32 {
+        let free = self.ore_capacity.saturating_sub(self.ore);
+        let added = amount.min(free);
+        self.ore += added;
+        added
+    }
+
+    /// Remove ore. Returns the amount actually removed.
+    pub fn remove_ore(&mut self, amount: u32) -> u32 {
+        let removed = amount.min(self.ore);
+        self.ore -= removed;
+        removed
+    }
+
+    /// Add fuel up to capacity. Returns the amount actually added.
+    #[allow(dead_code)]
+    pub fn add_fuel(&mut self, amount: f32) -> f32 {
+        let free = (self.fuel_capacity - self.fuel).max(0.0);
+        let added = amount.min(free);
+        self.fuel += added;
+        added
+    }
+
+    /// Remove fuel. Returns the amount actually removed.
+    #[allow(dead_code)]
+    pub fn remove_fuel(&mut self, amount: f32) -> f32 {
+        let removed = amount.min(self.fuel);
+        self.fuel -= removed;
+        removed
+    }
+
+    /// Get available ore space.
+    pub fn ore_free_space(&self) -> u32 {
+        self.ore_capacity.saturating_sub(self.ore)
+    }
+
+    /// Get available fuel space.
+    #[allow(dead_code)]
+    pub fn fuel_free_space(&self) -> f32 {
+        (self.fuel_capacity - self.fuel).max(0.0)
+    }
 }
 
 #[derive(Component, Debug, Clone, Copy, Default)]
@@ -110,7 +170,7 @@ pub fn ship_fuel_burn_per_minute(kind: ShipKind) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{cargo_capacity, ship_default_role, FleetRole, ShipKind};
+    use super::{cargo_capacity, ship_default_role, Cargo, FleetRole, ShipKind};
 
     #[test]
     fn ship_default_role_player_is_security() {
@@ -422,5 +482,117 @@ mod tests {
         let player = cargo_capacity(ShipKind::PlayerShip);
         let scout = cargo_capacity(ShipKind::Scout);
         assert!(player > scout);
+    }
+
+    // =============================================================================
+    // Cargo system tests (TDD - write failing tests first)
+    // =============================================================================
+
+    #[test]
+    fn cargo_default_has_zero_ore() {
+        let cargo = Cargo::default();
+        assert_eq!(cargo.ore, 0);
+    }
+
+    #[test]
+    fn cargo_default_has_zero_fuel() {
+        let cargo = Cargo::default();
+        assert!((cargo.fuel - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn cargo_default_ore_capacity_is_50() {
+        let cargo = Cargo::default();
+        assert_eq!(cargo.ore_capacity, 50);
+    }
+
+    #[test]
+    fn cargo_default_fuel_capacity_is_100() {
+        let cargo = Cargo::default();
+        assert!((cargo.fuel_capacity - 100.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn cargo_add_ore_respects_capacity() {
+        let mut cargo = Cargo::default();
+        let added = cargo.add_ore(30);
+        assert_eq!(added, 30);
+        assert_eq!(cargo.ore, 30);
+    }
+
+    #[test]
+    fn cargo_add_ore_cannot_exceed_capacity() {
+        let mut cargo = Cargo::default();
+        cargo.add_ore(40);
+        let added = cargo.add_ore(20);
+        assert_eq!(added, 10); // Only 10 fits
+        assert_eq!(cargo.ore, 50); // At capacity
+    }
+
+    #[test]
+    fn cargo_add_fuel_respects_capacity() {
+        let mut cargo = Cargo::default();
+        let added = cargo.add_fuel(50.0);
+        assert!((added - 50.0).abs() < f32::EPSILON);
+        assert!((cargo.fuel - 50.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn cargo_add_fuel_cannot_exceed_capacity() {
+        let mut cargo = Cargo::default();
+        cargo.add_fuel(80.0);
+        let added = cargo.add_fuel(30.0);
+        assert!((added - 20.0).abs() < f32::EPSILON); // Only 20 fits
+        assert!((cargo.fuel - 100.0).abs() < f32::EPSILON); // At capacity
+    }
+
+    #[test]
+    fn cargo_remove_ore_returns_amount_removed() {
+        let mut cargo = Cargo::default();
+        cargo.add_ore(30);
+        let removed = cargo.remove_ore(20);
+        assert_eq!(removed, 20);
+        assert_eq!(cargo.ore, 10);
+    }
+
+    #[test]
+    fn cargo_remove_ore_cannot_go_negative() {
+        let mut cargo = Cargo::default();
+        cargo.add_ore(10);
+        let removed = cargo.remove_ore(20);
+        assert_eq!(removed, 10); // Only had 10
+        assert_eq!(cargo.ore, 0);
+    }
+
+    #[test]
+    fn cargo_remove_fuel_returns_amount_removed() {
+        let mut cargo = Cargo::default();
+        cargo.add_fuel(50.0);
+        let removed = cargo.remove_fuel(30.0);
+        assert!((removed - 30.0).abs() < f32::EPSILON);
+        assert!((cargo.fuel - 20.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn cargo_remove_fuel_cannot_go_negative() {
+        let mut cargo = Cargo::default();
+        cargo.add_fuel(10.0);
+        let removed = cargo.remove_fuel(20.0);
+        assert!((removed - 10.0).abs() < f32::EPSILON); // Only had 10
+        assert!(cargo.fuel.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn cargo_ore_free_space_calculated_correctly() {
+        let mut cargo = Cargo::default();
+        cargo.add_ore(30);
+        assert_eq!(cargo.ore_free_space(), 20);
+    }
+
+    #[test]
+    fn cargo_fuel_free_space_calculated_correctly() {
+        let mut cargo = Cargo::default();
+        cargo.add_fuel(60.0);
+        assert!((cargo.fuel_free_space() - 40.0).abs() < f32::EPSILON);
     }
 }

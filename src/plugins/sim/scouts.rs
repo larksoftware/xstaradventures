@@ -10,7 +10,8 @@ use crate::plugins::player::PlayerControl;
 use crate::ships::{Ship, ShipState};
 use crate::stations::Station;
 use crate::world::{
-    JumpGate, KnowledgeLayer, SystemIntel, SystemNode, ZoneId, JUMP_TRANSITION_SECONDS,
+    Identified, JumpGate, JumpTransition, KnowledgeLayer, SystemIntel, SystemNode, ZoneId,
+    JUMP_TRANSITION_SECONDS,
 };
 
 use super::SimTickCount;
@@ -68,6 +69,7 @@ pub fn handle_scout_risk_input(
 pub fn scout_behavior(
     time: Res<Time<Fixed>>,
     ticks: Res<SimTickCount>,
+    mut commands: Commands,
     mut log: ResMut<EventLog>,
     mut scouts: Query<(
         Entity,
@@ -75,6 +77,7 @@ pub fn scout_behavior(
         &mut Transform,
         &mut ScoutBehavior,
         &mut ZoneId,
+        Option<&JumpTransition>,
     )>,
     gates: Query<(Entity, &Transform, &JumpGate, &ZoneId), Without<ScoutBehavior>>,
     ore_nodes: Query<(Entity, &Transform, &ZoneId), (With<OreNode>, Without<ScoutBehavior>)>,
@@ -91,7 +94,7 @@ pub fn scout_behavior(
 
     let delta_seconds = time.delta_secs();
 
-    for (_scout_entity, mut ship, mut transform, mut behavior, mut zone_id) in scouts.iter_mut() {
+    for (scout_entity, mut ship, mut transform, mut behavior, zone_id, jump_transition) in scouts.iter_mut() {
         if matches!(ship.state, ShipState::Disabled) {
             continue;
         }
@@ -109,13 +112,11 @@ pub fn scout_behavior(
                     // Mark zone as visited
                     behavior.mark_zone_visited(zone_id.0);
 
-                    // Reveal intel for current zone
+                    // Update intel for current zone (already revealed on arrival)
                     for (node, mut intel) in intel_query.iter_mut() {
-                        if node.id == zone_id.0 && !intel.revealed {
-                            intel.revealed = true;
+                        if node.id == zone_id.0 {
                             intel.confidence = 0.8;
                             intel.last_seen_tick = ticks.tick;
-                            intel.revealed_tick = ticks.tick;
                             if matches!(intel.layer, KnowledgeLayer::Existence) {
                                 intel.layer = KnowledgeLayer::Geography;
                             }
@@ -135,7 +136,7 @@ pub fn scout_behavior(
                                 entity: gate_entity,
                                 position: pos,
                                 contact_type: ContactType::JumpGate,
-                                status: crate::fleets::ContactStatus::Identified,
+                                status: crate::fleets::ContactStatus::Investigated,
                             });
                         }
                     }
@@ -170,7 +171,7 @@ pub fn scout_behavior(
                         }
                     }
 
-                    // Add ore nodes as unidentified contacts
+                    // Add ore nodes as pending contacts to investigate
                     for (ore_entity, ore_transform, ore_zone) in ore_nodes.iter() {
                         if ore_zone.0 == zone_id.0 {
                             let pos =
@@ -179,7 +180,7 @@ pub fn scout_behavior(
                         }
                     }
 
-                    // Add stations as unidentified contacts
+                    // Add stations as pending contacts to investigate
                     for (station_entity, station_transform, station_zone) in stations.iter() {
                         if station_zone.0 == zone_id.0 {
                             let pos = Vec2::new(
@@ -190,7 +191,7 @@ pub fn scout_behavior(
                         }
                     }
 
-                    // Add other ships as unidentified (will be skipped during investigation)
+                    // Add other ships as pending (will be skipped during investigation)
                     for (ship_entity, ship_transform, ship_zone) in other_ships.iter() {
                         if ship_zone.0 == zone_id.0 {
                             let pos = Vec2::new(
@@ -217,20 +218,20 @@ pub fn scout_behavior(
                     }
 
                     // Transition to investigation phase
-                    let unidentified_count = behavior
+                    let pending_count = behavior
                         .contacts
                         .iter()
-                        .filter(|c| matches!(c.status, crate::fleets::ContactStatus::Unidentified))
+                        .filter(|c| matches!(c.status, crate::fleets::ContactStatus::Pending))
                         .count();
                     info!(
                         "Scout: Beginning investigation of {} contacts",
-                        unidentified_count
+                        pending_count
                     );
                     behavior.begin_investigation();
                 }
             }
             ScoutPhase::Investigating => {
-                // Navigate to next unidentified contact
+                // Navigate to next pending contact
                 if let Some(contact) = behavior.next_contact_to_investigate() {
                     let contact_entity = contact.entity;
                     let contact_pos = contact.position;
@@ -256,6 +257,8 @@ pub fn scout_behavior(
                         };
 
                         behavior.identify_contact(contact_entity, actual_type);
+                        // Mark entity as identified so it shows proper label in contacts
+                        commands.entity(contact_entity).insert(Identified);
                         info!("Scout: Identified contact as {:?}", actual_type);
                         behavior.target_position = None;
                     } else {
@@ -276,6 +279,8 @@ pub fn scout_behavior(
             }
             ScoutPhase::TravelingToGate => {
                 scout_travel_to_gate(
+                    &mut commands,
+                    scout_entity,
                     &mut behavior,
                     &mut ship,
                     &mut transform,
@@ -284,13 +289,20 @@ pub fn scout_behavior(
                 );
             }
             ScoutPhase::Jumping => {
-                scout_process_jump(
-                    &mut behavior,
-                    &mut ship,
-                    &mut zone_id,
-                    delta_seconds,
-                    &mut log,
-                );
+                // Jump transition is processed by shared process_jump_transition system
+                // Detect completion when JumpTransition component is removed
+                if jump_transition.is_none() {
+                    // Jump completed - start scanning new zone
+                    let destination = behavior.jump_destination.unwrap_or(zone_id.0);
+                    behavior.complete_jump();
+                    behavior.current_zone = zone_id.0;
+                    ship.state = ShipState::Executing;
+                    info!("Scout: Arrived at zone {}, beginning scan", destination);
+                    log.push(format!("Scout arrived at zone {}", destination));
+                    behavior.start_scan();
+                } else {
+                    ship.state = ShipState::InTransit;
+                }
             }
             ScoutPhase::Complete => {
                 ship.state = ShipState::Idle;
@@ -304,6 +316,8 @@ pub fn scout_behavior(
 // =============================================================================
 
 fn scout_travel_to_gate(
+    commands: &mut Commands,
+    scout_entity: Entity,
     behavior: &mut ScoutBehavior,
     ship: &mut Ship,
     transform: &mut Transform,
@@ -330,9 +344,15 @@ fn scout_travel_to_gate(
             for (entity, _gate_transform, gate, _gate_zone) in gates.iter() {
                 if entity == target_gate {
                     info!("Scout: Jumping to zone {}", gate.destination_zone);
-                    behavior.start_jump(gate.destination_zone, JUMP_TRANSITION_SECONDS);
+                    // Use JumpTransition component (processed by shared system)
+                    commands.entity(scout_entity).insert(JumpTransition {
+                        destination_zone: gate.destination_zone,
+                        remaining_seconds: JUMP_TRANSITION_SECONDS,
+                    });
+                    behavior.phase = ScoutPhase::Jumping;
+                    behavior.jump_destination = Some(gate.destination_zone);
                     behavior.remove_gate(target_gate);
-                    ship.state = ShipState::Executing;
+                    ship.state = ShipState::InTransit;
                     return;
                 }
             }
@@ -347,30 +367,6 @@ fn scout_travel_to_gate(
         let step = direction * SCOUT_SPEED * delta_seconds;
         transform.translation.x += step.x;
         transform.translation.y += step.y;
-        ship.state = ShipState::InTransit;
-    }
-}
-
-fn scout_process_jump(
-    behavior: &mut ScoutBehavior,
-    ship: &mut Ship,
-    zone_id: &mut ZoneId,
-    delta_seconds: f32,
-    log: &mut EventLog,
-) {
-    behavior.jump_remaining_seconds -= delta_seconds;
-
-    if behavior.jump_remaining_seconds <= 0.0 {
-        let destination = behavior.jump_destination.unwrap_or(behavior.current_zone);
-        behavior.complete_jump();
-        // Update the actual ZoneId component
-        zone_id.0 = behavior.current_zone;
-        ship.state = ShipState::Executing;
-        info!("Scout: Arrived at zone {}, beginning scan", destination);
-        log.push(format!("Scout arrived at zone {}", destination));
-        // Start scanning the new zone
-        behavior.start_scan();
-    } else {
         ship.state = ShipState::InTransit;
     }
 }

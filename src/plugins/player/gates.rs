@@ -2,10 +2,13 @@
 
 use bevy::prelude::*;
 
+use crate::fleets::ScoutBehavior;
 use crate::plugins::core::{EventLog, InputBindings};
+use crate::plugins::sim::SimTickCount;
 use crate::ships::Ship;
 use crate::world::{
-    JumpGate, JumpTransition, ZoneId, JUMP_GATE_FUEL_COST, JUMP_TRANSITION_SECONDS,
+    JumpGate, JumpTransition, SystemIntel, SystemNode, ZoneId, JUMP_GATE_FUEL_COST,
+    JUMP_TRANSITION_SECONDS,
 };
 
 use super::components::PlayerControl;
@@ -91,23 +94,50 @@ pub fn player_activate_jump_gate(
     log.push(format!("Jumping to zone {}...", gate.destination_zone));
 }
 
+/// Process jump transitions for all ships. Reveals zones only for player-owned ships.
+#[allow(clippy::type_complexity)]
 pub fn process_jump_transition(
     time: Res<Time<Fixed>>,
+    ticks: Res<SimTickCount>,
     mut commands: Commands,
     mut log: ResMut<EventLog>,
-    mut player_query: Query<(Entity, &mut ZoneId, &mut JumpTransition), With<PlayerControl>>,
+    mut jumping_ships: Query<(
+        Entity,
+        &mut ZoneId,
+        &mut JumpTransition,
+        Option<&PlayerControl>,
+        Option<&ScoutBehavior>,
+    )>,
+    mut intel_query: Query<(&SystemNode, &mut SystemIntel)>,
 ) {
-    let Ok((player_entity, mut zone_id, mut transition)) = player_query.single_mut() else {
-        return;
-    };
+    for (entity, mut zone_id, mut transition, player_ctrl, scout) in jumping_ships.iter_mut() {
+        transition.remaining_seconds -= time.delta_secs();
 
-    transition.remaining_seconds -= time.delta_secs();
+        if transition.remaining_seconds <= 0.0 {
+            // Complete the jump
+            let destination = transition.destination_zone;
+            zone_id.0 = destination;
+            commands.entity(entity).remove::<JumpTransition>();
 
-    if transition.remaining_seconds <= 0.0 {
-        // Complete the jump
-        zone_id.0 = transition.destination_zone;
-        commands.entity(player_entity).remove::<JumpTransition>();
-        log.push(format!("Arrived at zone {}", zone_id.0));
+            // Reveal zone only for player-owned ships (player or scouts)
+            let is_player_owned = player_ctrl.is_some() || scout.is_some();
+            if is_player_owned {
+                for (node, mut intel) in intel_query.iter_mut() {
+                    if node.id == destination && !intel.revealed {
+                        intel.revealed = true;
+                        // Player gets better intel than scouts on arrival
+                        intel.confidence = if player_ctrl.is_some() { 0.8 } else { 0.5 };
+                        intel.last_seen_tick = ticks.tick;
+                        intel.revealed_tick = ticks.tick;
+                    }
+                }
+            }
+
+            // Log arrival for player ship only
+            if player_ctrl.is_some() {
+                log.push(format!("Arrived at zone {}", destination));
+            }
+        }
     }
 }
 

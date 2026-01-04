@@ -8,11 +8,12 @@ use std::path::Path;
 use crate::compat::{SpriteBundle, TextBundle, TextStyle};
 use crate::plugins::core::FogConfig;
 use crate::plugins::ui::{HoveredNode, MapUi};
-use crate::world::{KnowledgeLayer, Sector, SystemIntel, SystemNode};
+use crate::stations::{Station, StationKind};
+use crate::world::{KnowledgeLayer, Sector, SystemIntel, SystemNode, ZoneId};
 
 use super::components::{
-    find_node_position, layer_floor, layer_short, modifier_icon, risk_color, NodeLabel, NodeVisual,
-    NodeVisualMarker, RouteLabel,
+    find_node_position, layer_floor, layer_short, modifier_icon, risk_color, station_kind_short,
+    NodeLabel, NodeVisual, NodeVisualMarker, RouteLabel, StationMapLabel,
 };
 
 // =============================================================================
@@ -493,6 +494,102 @@ pub fn update_hovered_node(
 pub fn clear_focus_marker_on_map(mut marker: ResMut<FocusMarker>) {
     marker.position = None;
     marker.node_id = None;
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn update_station_map_labels(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    toggles: Res<RenderToggles>,
+    debug_window: Res<crate::plugins::core::DebugWindow>,
+    nodes: Query<(&SystemNode, &SystemIntel)>,
+    stations: Query<(&Station, &ZoneId)>,
+    labels: Query<Entity, With<StationMapLabel>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+) {
+    // Despawn old labels
+    for entity in labels.iter() {
+        commands.entity(entity).despawn();
+    }
+
+    if !toggles.show_nodes || debug_window.open {
+        return;
+    }
+
+    let (camera, camera_transform) = match cameras.single() {
+        Ok(value) => value,
+        Err(_) => {
+            return;
+        }
+    };
+
+    let font_path = "fonts/SpaceMono-Regular.ttf";
+    let font_on_disk = Path::new("assets").join(font_path);
+
+    if !font_on_disk.exists() {
+        return;
+    }
+
+    let font = asset_server.load(font_path);
+
+    // Build map of zone_id -> node position (only revealed zones)
+    let mut zone_positions: std::collections::HashMap<u32, Vec2> = std::collections::HashMap::new();
+    for (node, intel) in nodes.iter() {
+        if intel.revealed {
+            zone_positions.insert(node.id, node.position);
+        }
+    }
+
+    // Group stations by zone
+    let mut zone_stations: std::collections::HashMap<u32, Vec<StationKind>> =
+        std::collections::HashMap::new();
+    for (station, zone_id) in stations.iter() {
+        zone_stations
+            .entry(zone_id.0)
+            .or_default()
+            .push(station.kind);
+    }
+
+    // Render station indicators for revealed zones
+    for (zone_id, station_kinds) in zone_stations.iter() {
+        let position = match zone_positions.get(zone_id) {
+            Some(pos) => pos,
+            None => continue, // Zone not revealed
+        };
+
+        // Build label text: e.g., "R Y" for Refinery + Shipyard
+        let label: String = station_kinds
+            .iter()
+            .map(|k| station_kind_short(*k))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        // Position below the node (opposite of node labels which are above)
+        let map_pos = *position + Vec2::new(0.0, -45.0);
+        if let Ok(screen) = camera.world_to_viewport(camera_transform, map_pos.extend(0.0)) {
+            let label_pos = Vec2::new(screen.x - 10.0, screen.y);
+            commands.spawn((
+                StationMapLabel,
+                MapUi,
+                TextBundle::from_section(
+                    label,
+                    TextStyle {
+                        font: font.clone(),
+                        font_size: 12.0,
+                        color: Color::srgba(0.7, 0.85, 0.95, 0.9),
+                    },
+                )
+                .with_node(UiNode {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(label_pos.x),
+                    top: Val::Px(label_pos.y),
+                    padding: UiRect::all(Val::Px(2.0)),
+                    ..default()
+                })
+                .with_background_color(Color::srgba(0.1, 0.15, 0.2, 0.7)),
+            ));
+        }
+    }
 }
 
 // =============================================================================

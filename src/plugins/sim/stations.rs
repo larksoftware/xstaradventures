@@ -2,11 +2,16 @@
 
 use bevy::prelude::*;
 
+use crate::compat::SpatialBundle;
+use crate::fleets::{RiskTolerance, ScoutBehavior};
 use crate::plugins::core::EventLog;
+use crate::ships::{cargo_capacity, ship_fuel_capacity, Cargo, Fleet, Ship, ShipFuelAlert, ShipKind, ShipState, ship_default_role};
 use crate::stations::{
     station_fuel_burn_per_minute, station_ore_production_per_minute, CrisisStage, CrisisType,
-    Station, StationBuild, StationCrisis, StationCrisisLog, StationProduction, StationState,
+    RefineryJob, RefineryStorage, ShipyardJob, Station, StationBuild, StationCrisis,
+    StationCrisisLog, StationProduction, StationState,
 };
+use crate::world::ZoneId;
 
 use super::SimTickCount;
 
@@ -189,6 +194,121 @@ pub fn log_station_crisis_changes(
             }
             log_state.last_type = current_type;
             log_state.last_stage = current_stage;
+        }
+    }
+}
+
+/// Process shipyard jobs - tick timers and spawn scouts when complete
+pub fn shipyard_job_progress(
+    time: Res<Time<Fixed>>,
+    mut commands: Commands,
+    mut log: ResMut<EventLog>,
+    mut stations: Query<(Entity, &Station, &Transform, &ZoneId, &mut ShipyardJob)>,
+) {
+    let delta_seconds = time.delta_secs();
+
+    for (entity, station, transform, zone_id, mut job) in stations.iter_mut() {
+        // Only progress when station is Operational
+        if !matches!(station.state, StationState::Operational) {
+            continue;
+        }
+
+        job.remaining_seconds -= delta_seconds;
+
+        if job.remaining_seconds <= 0.0 {
+            // Job complete - spawn scout
+            let scout_capacity = ship_fuel_capacity(ShipKind::Scout);
+            let spawn_pos = Vec3::new(
+                transform.translation.x + 30.0,
+                transform.translation.y + 15.0,
+                0.4,
+            );
+
+            commands.spawn((
+                Ship {
+                    kind: ShipKind::Scout,
+                    state: ShipState::Idle,
+                    fuel: scout_capacity * 0.8,
+                    fuel_capacity: scout_capacity,
+                },
+                Cargo {
+                    ore: 0,
+                    ore_capacity: cargo_capacity(ShipKind::Scout) as u32,
+                    fuel: 0.0,
+                    fuel_capacity: 20.0,
+                },
+                Fleet {
+                    role: ship_default_role(ShipKind::Scout),
+                },
+                ScoutBehavior::new(zone_id.0, RiskTolerance::Balanced),
+                ShipFuelAlert::default(),
+                ZoneId(zone_id.0),
+                Name::new("Pathfinder"),
+                SpatialBundle::from_transform(Transform::from_translation(spawn_pos)),
+            ));
+
+            commands.entity(entity).remove::<ShipyardJob>();
+            log.push("Shipyard: Scout construction complete".to_string());
+        }
+    }
+}
+
+/// Process refinery jobs - tick timers and add fuel to storage when complete
+pub fn refinery_job_progress(
+    time: Res<Time<Fixed>>,
+    mut commands: Commands,
+    mut log: ResMut<EventLog>,
+    mut stations: Query<(Entity, &Station, &mut RefineryJob, Option<&mut RefineryStorage>)>,
+) {
+    let delta_seconds = time.delta_secs();
+
+    for (entity, station, mut job, storage) in stations.iter_mut() {
+        // Only progress when station is Operational
+        if !matches!(station.state, StationState::Operational) {
+            continue;
+        }
+
+        job.remaining_seconds -= delta_seconds;
+
+        if job.remaining_seconds <= 0.0 {
+            // Job complete - add fuel to storage
+            let fuel_produced = job.fuel_out;
+
+            if let Some(mut storage) = storage {
+                storage.add_fuel(fuel_produced);
+            } else {
+                // Station doesn't have storage, create one
+                commands.entity(entity).insert(RefineryStorage {
+                    fuel: fuel_produced,
+                    fuel_capacity: 50.0,
+                });
+            }
+
+            commands.entity(entity).remove::<RefineryJob>();
+            log.push(format!("Refinery: Converted ore to {:.0} fuel", fuel_produced));
+        }
+    }
+}
+
+/// Remove jobs from stations that have failed
+pub fn station_job_loss_on_fail(
+    mut commands: Commands,
+    mut log: ResMut<EventLog>,
+    stations: Query<(Entity, &Station, Option<&ShipyardJob>, Option<&RefineryJob>)>,
+) {
+    for (entity, station, shipyard_job, refinery_job) in stations.iter() {
+        if !matches!(station.state, StationState::Failed) {
+            continue;
+        }
+
+        if shipyard_job.is_some() {
+            commands.entity(entity).remove::<ShipyardJob>();
+            log.push("Station failed: Scout construction lost!".to_string());
+        }
+
+        if refinery_job.is_some() {
+            commands.entity(entity).remove::<RefineryJob>();
+            log.push("Station failed: Ore conversion lost!".to_string());
         }
     }
 }
@@ -446,5 +566,130 @@ mod tests {
         let log = world.resource::<EventLog>();
         assert_eq!(log.entries().len(), 1);
         assert!(log.entries()[0].contains("crisis"));
+    }
+
+    #[test]
+    fn shipyard_job_pauses_when_strained() {
+        let mut world = World::default();
+        let mut time = Time::<Fixed>::from_duration(Duration::from_secs_f32(10.0));
+        time.advance_by(Duration::from_secs_f32(10.0));
+        world.insert_resource(time);
+        world.insert_resource(EventLog::default());
+
+        world.spawn((
+            Station {
+                kind: StationKind::Shipyard,
+                state: StationState::Strained,
+                fuel: 5.0,
+                fuel_capacity: 50.0,
+            },
+            super::ShipyardJob {
+                ore_in: 15,
+                fuel_in: 0.0,
+                remaining_seconds: 100.0,
+            },
+            Transform::from_xyz(0.0, 0.0, 0.0),
+            ZoneId(1),
+        ));
+
+        let mut system_state: SystemState<(
+            Res<Time<Fixed>>,
+            Commands,
+            ResMut<EventLog>,
+            Query<(Entity, &Station, &Transform, &ZoneId, &mut super::ShipyardJob)>,
+        )> = SystemState::new(&mut world);
+        let (time, commands, log, stations) = system_state.get_mut(&mut world);
+        super::shipyard_job_progress(time, commands, log, stations);
+        system_state.apply(&mut world);
+
+        // Job should NOT have progressed (still 100 seconds)
+        let mut query = world.query::<&super::ShipyardJob>();
+        for job in query.iter(&world) {
+            assert!(
+                (job.remaining_seconds - 100.0).abs() < f32::EPSILON,
+                "Job should not progress when station is Strained"
+            );
+        }
+    }
+
+    #[test]
+    fn refinery_job_pauses_when_failing() {
+        let mut world = World::default();
+        let mut time = Time::<Fixed>::from_duration(Duration::from_secs_f32(10.0));
+        time.advance_by(Duration::from_secs_f32(10.0));
+        world.insert_resource(time);
+        world.insert_resource(EventLog::default());
+
+        world.spawn((
+            Station {
+                kind: StationKind::Refinery,
+                state: StationState::Failing,
+                fuel: 2.0,
+                fuel_capacity: 60.0,
+            },
+            super::RefineryJob {
+                ore_in: 5,
+                fuel_out: 10.0,
+                remaining_seconds: 50.0,
+            },
+        ));
+
+        let mut system_state: SystemState<(
+            Res<Time<Fixed>>,
+            Commands,
+            ResMut<EventLog>,
+            Query<(Entity, &Station, &mut super::RefineryJob, Option<&mut super::RefineryStorage>)>,
+        )> = SystemState::new(&mut world);
+        let (time, commands, log, stations) = system_state.get_mut(&mut world);
+        super::refinery_job_progress(time, commands, log, stations);
+        system_state.apply(&mut world);
+
+        // Job should NOT have progressed
+        let mut query = world.query::<&super::RefineryJob>();
+        for job in query.iter(&world) {
+            assert!(
+                (job.remaining_seconds - 50.0).abs() < f32::EPSILON,
+                "Job should not progress when station is Failing"
+            );
+        }
+    }
+
+    #[test]
+    fn job_removed_when_station_fails() {
+        let mut world = World::default();
+        world.insert_resource(EventLog::default());
+
+        let entity = world
+            .spawn((
+                Station {
+                    kind: StationKind::Shipyard,
+                    state: StationState::Failed,
+                    fuel: 0.0,
+                    fuel_capacity: 50.0,
+                },
+                super::ShipyardJob {
+                    ore_in: 15,
+                    fuel_in: 0.0,
+                    remaining_seconds: 50.0,
+                },
+            ))
+            .id();
+
+        let mut system_state: SystemState<(
+            Commands,
+            ResMut<EventLog>,
+            Query<(Entity, &Station, Option<&super::ShipyardJob>, Option<&super::RefineryJob>)>,
+        )> = SystemState::new(&mut world);
+        let (commands, log, stations) = system_state.get_mut(&mut world);
+        super::station_job_loss_on_fail(commands, log, stations);
+        system_state.apply(&mut world);
+
+        // Job should be removed
+        let has_job = world.get::<super::ShipyardJob>(entity).is_some();
+        assert!(!has_job, "Job should be removed when station fails");
+
+        // Should have logged the loss
+        let log = world.resource::<EventLog>();
+        assert!(log.entries().iter().any(|e| e.contains("lost")));
     }
 }

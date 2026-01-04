@@ -7,7 +7,7 @@ use crate::compat::TextBundle;
 use crate::compat::TextStyle;
 use crate::plugins::player::NearbyTargets;
 
-use super::components::{contact_item_color, ContactItem, ContactsListContainer};
+use super::components::{contact_item_color, ContactItem, ContactsEmptyText, ContactsListContainer};
 
 // =============================================================================
 // Systems
@@ -19,11 +19,9 @@ pub fn update_tactical_panel(
     targets: Res<NearbyTargets>,
     container_query: Query<(Entity, Option<&Children>), With<ContactsListContainer>>,
     existing_items: Query<Entity, With<ContactItem>>,
+    existing_empty: Query<Entity, With<ContactsEmptyText>>,
 ) {
-    // Only rebuild when targets change
-    if !targets.is_changed() {
-        return;
-    }
+    // Always rebuild - list is small and needs to reflect current proximity sort
 
     let font_path = "fonts/SpaceMono-Regular.ttf";
     let font_on_disk = Path::new("assets").join(font_path);
@@ -37,21 +35,27 @@ pub fn update_tactical_panel(
         return;
     };
 
-    // Despawn existing items
+    // Despawn existing items and empty text
     for item_entity in existing_items.iter() {
         commands.entity(item_entity).despawn();
+    }
+    for empty_entity in existing_empty.iter() {
+        commands.entity(empty_entity).despawn();
     }
 
     // Spawn new items
     commands.entity(container_entity).with_children(|parent| {
         if targets.entities.is_empty() {
-            parent.spawn(TextBundle::from_section(
-                "(unidentified)",
-                TextStyle {
-                    font: font.clone(),
-                    font_size: 13.0,
-                    color: Color::srgb(0.4, 0.6, 0.6),
-                },
+            parent.spawn((
+                ContactsEmptyText,
+                TextBundle::from_section(
+                    "(no contacts)",
+                    TextStyle {
+                        font: font.clone(),
+                        font_size: 13.0,
+                        color: Color::srgb(0.4, 0.6, 0.6),
+                    },
+                ),
             ));
         } else {
             for (index, (_, _, label)) in targets.entities.iter().enumerate() {
@@ -115,7 +119,7 @@ pub fn format_contacts_panel(
     lines.push("--------".to_string());
 
     if entities.is_empty() {
-        lines.push("(unidentified)".to_string());
+        lines.push("(no contacts)".to_string());
     } else {
         for (index, (_, _, label)) in entities.iter().enumerate() {
             let indicator = if index == selected_index { ">" } else { " " };
@@ -135,13 +139,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn contacts_panel_empty_shows_unidentified() {
+    fn contacts_panel_empty_shows_no_contacts() {
         let entities: Vec<(Entity, Vec2, String)> = vec![];
         let result = format_contacts_panel(&entities, 0);
 
         assert!(result.contains("Contacts"));
         assert!(result.contains("--------"));
-        assert!(result.contains("(unidentified)"));
+        assert!(result.contains("(no contacts)"));
     }
 
     #[test]

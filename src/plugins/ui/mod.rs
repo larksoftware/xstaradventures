@@ -11,6 +11,7 @@
 mod components;
 mod contacts;
 mod debug;
+mod docking;
 mod fleet;
 mod hud;
 mod intel;
@@ -45,6 +46,7 @@ impl Plugin for UIPlugin {
                 map_panels::setup_hover_panel,
                 hud::setup_hud,
                 debug::setup_debug_panel,
+                docking::setup_docking_menu,
             ),
         )
         .add_systems(
@@ -59,6 +61,9 @@ impl Plugin for UIPlugin {
                 fleet::update_fleet_panel,
                 map_panels::sync_map_ui_visibility,
                 map_panels::sync_map_grid_visibility,
+                docking::update_docking_menu_visibility,
+                docking::update_docking_menu_content,
+                docking::handle_docking_menu_clicks,
             ),
         )
         .add_systems(

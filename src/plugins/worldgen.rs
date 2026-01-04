@@ -118,6 +118,7 @@ fn apply_seed_world(commands: &mut Commands, sector: &mut Sector, seed: u64) {
     spawn_jump_gates(commands, &nodes, &sector.routes);
 
     spawn_starting_entities(commands, sector);
+    spawn_stations(commands, sector, &mut rng);
     spawn_pirates(commands, sector, &mut rng);
 }
 
@@ -249,30 +250,19 @@ fn handle_debug_spawns(
         }
     };
 
+    // Spawn FuelDepot with Shift+B
     if input.just_pressed(bindings.spawn_station) {
-        let kind = StationKind::FuelDepot;
-        let capacity = station_fuel_capacity(kind);
-        let build_time = station_build_time_seconds(kind);
+        spawn_station_debug(&mut commands, node, StationKind::FuelDepot);
+    }
 
-        commands.spawn((
-            Station {
-                kind,
-                state: StationState::Deploying,
-                fuel: capacity * 0.5,
-                fuel_capacity: capacity,
-            },
-            StationBuild {
-                remaining_seconds: build_time,
-            },
-            StationCrisisLog::default(),
-            ZoneId(node.id),
-            Name::new(format!("Station-Spawned-{}", node.id)),
-            SpatialBundle::from_transform(Transform::from_xyz(
-                node.position.x + 40.0,
-                node.position.y + 20.0,
-                0.5,
-            )),
-        ));
+    // Spawn Refinery with Shift+1
+    if input.just_pressed(bindings.spawn_refinery) {
+        spawn_station_debug(&mut commands, node, StationKind::Refinery);
+    }
+
+    // Spawn Shipyard with Shift+2
+    if input.just_pressed(bindings.spawn_shipyard) {
+        spawn_station_debug(&mut commands, node, StationKind::Shipyard);
     }
 
     if input.just_pressed(bindings.spawn_ship) {
@@ -372,10 +362,7 @@ fn spawn_player_ship(commands: &mut Commands, node: &SystemNode) {
             fuel: capacity * 0.9,
             fuel_capacity: capacity,
         },
-        Cargo {
-            common_ore: 0.0,
-            capacity: cargo_capacity(ShipKind::PlayerShip),
-        },
+        Cargo::default(),
         Velocity::default(),
         PlayerControl,
         ShipFuelAlert::default(),
@@ -397,8 +384,10 @@ fn spawn_ship_stub(commands: &mut Commands, node: &SystemNode) {
             fuel_capacity: scout_capacity,
         },
         Cargo {
-            common_ore: 0.0,
-            capacity: cargo_capacity(ShipKind::Scout),
+            ore: 0,
+            ore_capacity: cargo_capacity(ShipKind::Scout) as u32,
+            fuel: 0.0,
+            fuel_capacity: 20.0,
         },
         Fleet {
             role: ship_default_role(ShipKind::Scout),
@@ -415,6 +404,32 @@ fn spawn_ship_stub(commands: &mut Commands, node: &SystemNode) {
     ));
 }
 
+/// Spawn a station of the given kind at the given node (debug command)
+fn spawn_station_debug(commands: &mut Commands, node: &SystemNode, kind: StationKind) {
+    let capacity = station_fuel_capacity(kind);
+    let build_time = station_build_time_seconds(kind);
+
+    commands.spawn((
+        Station {
+            kind,
+            state: StationState::Deploying,
+            fuel: capacity * 0.5,
+            fuel_capacity: capacity,
+        },
+        StationBuild {
+            remaining_seconds: build_time,
+        },
+        StationCrisisLog::default(),
+        ZoneId(node.id),
+        Name::new(format!("Station-{:?}-{}", kind, node.id)),
+        SpatialBundle::from_transform(Transform::from_xyz(
+            node.position.x + 40.0,
+            node.position.y + 20.0,
+            0.5,
+        )),
+    ));
+}
+
 fn spawn_pirate(commands: &mut Commands, node: &SystemNode) {
     commands.spawn((
         PirateShip { speed: 70.0 },
@@ -426,6 +441,111 @@ fn spawn_pirate(commands: &mut Commands, node: &SystemNode) {
             0.4,
         )),
     ));
+}
+
+/// Spawn refineries and shipyards on non-starter zones
+fn spawn_stations(commands: &mut Commands, sector: &Sector, rng: &mut u64) {
+    let safe_zones = get_safe_zones(sector);
+
+    // Get eligible zones (not starter zone, not adjacent to starter)
+    let eligible_nodes: Vec<&SystemNode> = sector
+        .nodes
+        .iter()
+        .filter(|n| !safe_zones.contains(&n.id))
+        .collect();
+
+    if eligible_nodes.is_empty() {
+        return;
+    }
+
+    // Spawn 2-3 Refineries
+    let refinery_count = 2 + (next_unit(rng) * 2.0) as usize; // 2-3
+    let refinery_count = refinery_count.min(eligible_nodes.len());
+
+    let mut used_zones = std::collections::HashSet::new();
+
+    for i in 0..refinery_count {
+        // Pick a random eligible node that hasn't been used
+        let available: Vec<&SystemNode> = eligible_nodes
+            .iter()
+            .filter(|n| !used_zones.contains(&n.id))
+            .copied()
+            .collect();
+
+        if available.is_empty() {
+            break;
+        }
+
+        let index = (next_unit(rng) * available.len() as f32) as usize;
+        let index = index.min(available.len().saturating_sub(1));
+        let node = available[index];
+        used_zones.insert(node.id);
+
+        let kind = StationKind::Refinery;
+        let capacity = station_fuel_capacity(kind);
+        let offset_x = 50.0 + next_unit(rng) * 50.0;
+        let offset_y = 30.0 + next_unit(rng) * 40.0;
+
+        commands.spawn((
+            Station {
+                kind,
+                state: StationState::Operational,
+                fuel: capacity * 0.5,
+                fuel_capacity: capacity,
+            },
+            StationCrisisLog::default(),
+            ZoneId(node.id),
+            Name::new(format!("Refinery-{}-{}", node.id, i)),
+            SpatialBundle::from_transform(Transform::from_xyz(
+                node.position.x + offset_x,
+                node.position.y + offset_y,
+                0.5,
+            )),
+        ));
+    }
+
+    // Spawn 1-2 Shipyards
+    let shipyard_count = 1 + (next_unit(rng) * 2.0) as usize; // 1-2
+    let shipyard_count = shipyard_count.min(eligible_nodes.len().saturating_sub(used_zones.len()));
+
+    for i in 0..shipyard_count {
+        let available: Vec<&SystemNode> = eligible_nodes
+            .iter()
+            .filter(|n| !used_zones.contains(&n.id))
+            .copied()
+            .collect();
+
+        if available.is_empty() {
+            break;
+        }
+
+        let index = (next_unit(rng) * available.len() as f32) as usize;
+        let index = index.min(available.len().saturating_sub(1));
+        let node = available[index];
+        used_zones.insert(node.id);
+
+        let kind = StationKind::Shipyard;
+        let capacity = station_fuel_capacity(kind);
+        let offset_x = -50.0 - next_unit(rng) * 50.0;
+        let offset_y = 30.0 + next_unit(rng) * 40.0;
+
+        commands.spawn((
+            Station {
+                kind,
+                state: StationState::Operational,
+                fuel: capacity * 0.5,
+                fuel_capacity: capacity,
+            },
+            StationCrisisLog::default(),
+            ZoneId(node.id),
+            Name::new(format!("Shipyard-{}-{}", node.id, i)),
+            SpatialBundle::from_transform(Transform::from_xyz(
+                node.position.x + offset_x,
+                node.position.y + offset_y,
+                0.5,
+            )),
+        ));
+    }
 }
 
 /// Returns the set of zone IDs that are within 1 jump of the starter zone
@@ -659,7 +779,8 @@ fn generate_routes(nodes: &[SystemNode], rng: &mut u64) -> Vec<RouteEdge> {
     }
 
     let mut routes = Vec::new();
-    let mut connection_count: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    let mut connection_count: std::collections::HashMap<u32, usize> =
+        std::collections::HashMap::new();
 
     // Initialize connection counts
     for node in nodes {
@@ -833,7 +954,10 @@ mod tests {
         assert_eq!(sector.nodes.len(), 50);
         // MST has n-1 = 49 routes minimum, plus random extras
         assert!(sector.routes.len() >= 49, "Need at least MST routes");
-        assert!(sector.routes.len() <= 100, "Should not exceed reasonable route count");
+        assert!(
+            sector.routes.len() <= 100,
+            "Should not exceed reasonable route count"
+        );
     }
 
     #[test]

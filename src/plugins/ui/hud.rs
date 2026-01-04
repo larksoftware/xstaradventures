@@ -456,8 +456,8 @@ pub fn update_player_panel(
             let fuel_bar: String = "=".repeat(fuel_filled) + &"-".repeat(10 - fuel_filled);
 
             // Build ore bar (10 chars) using ASCII
-            let ore_pct = if cargo.capacity > 0.0 {
-                (cargo.common_ore / cargo.capacity) * 100.0
+            let ore_pct = if cargo.ore_capacity > 0 {
+                (cargo.ore as f32 / cargo.ore_capacity as f32) * 100.0
             } else {
                 0.0
             };
