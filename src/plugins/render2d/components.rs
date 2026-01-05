@@ -127,6 +127,17 @@ pub fn station_kind_short(kind: crate::stations::StationKind) -> &'static str {
         crate::stations::StationKind::SensorStation => "S",
         crate::stations::StationKind::Shipyard => "Y",
         crate::stations::StationKind::Refinery => "R",
+        crate::stations::StationKind::Outpost => "O",
+    }
+}
+
+/// Get the color for a station kind (for rendering labels/icons)
+pub fn station_kind_color(kind: crate::stations::StationKind) -> Color {
+    match kind {
+        // NPC Outpost - neutral yellow/white
+        crate::stations::StationKind::Outpost => Color::srgb(0.95, 0.9, 0.5),
+        // Player stations - standard yellow-brown
+        _ => Color::srgb(0.85, 0.8, 0.35),
     }
 }
 

@@ -64,7 +64,7 @@ When docked at a Shipyard or Refinery, a menu appears with available actions:
 
 ## Simulation Controls
 
-- `Escape`: toggle pause.
+- `Shift+P`: toggle pause.
 - `[` / `]`: decrease/increase simulation tick rate.
 
 ## Map Controls
@@ -86,6 +86,7 @@ Press `F3` to open/close the debug window. All debug commands require **Shift** 
 - `Shift+B`: spawn FuelDepot.
 - `Shift+1`: spawn Refinery.
 - `Shift+2`: spawn Shipyard.
+- `Shift+3`: spawn Outpost (NPC trader station).
 - `Shift+S`: spawn Scout.
 - `Shift+P`: spawn Pirate.
 

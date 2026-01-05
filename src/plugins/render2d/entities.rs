@@ -13,11 +13,11 @@ use crate::stations::Station;
 use crate::world::ZoneId;
 
 use super::components::{
-    is_visible_in_zone, ship_kind_short, ship_state_short, station_kind_short, OreSpawnFilter,
-    OreVisual, OreVisualMarker, PirateBaseSpawnFilter, PirateBaseVisual, PirateBaseVisualMarker,
-    PirateShipSpawnFilter, PirateShipVisual, PirateShipVisualMarker, ShipLabel, ShipSpawnFilter,
-    ShipVisual, ShipVisualMarker, StationLabel, StationSpawnFilter, StationVisual,
-    StationVisualMarker,
+    is_visible_in_zone, ship_kind_short, ship_state_short, station_kind_color, station_kind_short,
+    OreSpawnFilter, OreVisual, OreVisualMarker, PirateBaseSpawnFilter, PirateBaseVisual,
+    PirateBaseVisualMarker, PirateShipSpawnFilter, PirateShipVisual, PirateShipVisualMarker,
+    ShipLabel, ShipSpawnFilter, ShipVisual, ShipVisualMarker, StationLabel, StationSpawnFilter,
+    StationVisual, StationVisualMarker,
 };
 
 // =============================================================================
@@ -157,7 +157,7 @@ pub fn update_station_labels(
             TextStyle {
                 font: font.clone(),
                 font_size: 12.0,
-                color: Color::srgb(0.85, 0.8, 0.35),
+                color: station_kind_color(station.kind),
             },
         );
         bundle.transform = Transform::from_xyz(pos.x, pos.y, 1.0);

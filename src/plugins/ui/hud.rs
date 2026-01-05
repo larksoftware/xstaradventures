@@ -6,8 +6,7 @@ use std::path::Path;
 
 use crate::compat::{NodeBundle, TextBundle, TextStyle};
 use crate::plugins::player::PlayerControl;
-use crate::ships::Cargo;
-use crate::ships::Ship;
+use crate::ships::{Cargo, Credits, Ship};
 use crate::world::ZoneId;
 
 use super::components::{
@@ -436,7 +435,7 @@ fn spawn_compass_markers(commands: &mut Commands, font: &Handle<Font>) {
 // =============================================================================
 
 pub fn update_player_panel(
-    player: Query<(&Ship, &Cargo, &ZoneId), With<PlayerControl>>,
+    player: Query<(&Ship, &Cargo, &Credits, &ZoneId), With<PlayerControl>>,
     mut panel: Query<&mut Text, With<PlayerPanelText>>,
 ) {
     let Some(mut text) = panel.iter_mut().next() else {
@@ -444,7 +443,7 @@ pub fn update_player_panel(
     };
 
     match player.single() {
-        Ok((ship, cargo, zone_id)) => {
+        Ok((ship, cargo, credits, zone_id)) => {
             let fuel_pct = if ship.fuel_capacity > 0.0 {
                 (ship.fuel / ship.fuel_capacity) * 100.0
             } else {
@@ -465,8 +464,8 @@ pub fn update_player_panel(
             let ore_bar: String = "=".repeat(ore_filled) + &"-".repeat(10 - ore_filled);
 
             text.0 = format!(
-                "Zone {} | FUEL [{}] {:>3.0}% | ORE [{}] {:>3.0}%",
-                zone_id.0, fuel_bar, fuel_pct, ore_bar, ore_pct
+                "Zone {} | FUEL [{}] {:>3.0}% | ORE [{}] {:>3.0}% | {} cr",
+                zone_id.0, fuel_bar, fuel_pct, ore_bar, ore_pct, credits.amount
             );
         }
         Err(_) => {

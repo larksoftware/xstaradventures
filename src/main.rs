@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 mod compat;
+mod factions;
 mod fleets;
 mod ore;
 mod pirates;

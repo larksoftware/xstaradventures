@@ -141,6 +141,7 @@ pub struct InputBindings {
     pub spawn_station: KeyCode,
     pub spawn_refinery: KeyCode,
     pub spawn_shipyard: KeyCode,
+    pub spawn_outpost: KeyCode,
     pub spawn_ship: KeyCode,
     pub spawn_pirate: KeyCode,
     pub reveal_all: KeyCode,
@@ -162,7 +163,7 @@ impl Default for InputBindings {
             toggle_debug: KeyCode::F3,
             scout_risk_down: KeyCode::Comma,
             scout_risk_up: KeyCode::Period,
-            pause: KeyCode::Escape,
+            pause: KeyCode::KeyP,
             rate_up: KeyCode::BracketRight,
             rate_down: KeyCode::BracketLeft,
             save: KeyCode::F5,
@@ -183,6 +184,7 @@ impl Default for InputBindings {
             spawn_station: KeyCode::KeyB,
             spawn_refinery: KeyCode::Digit1,
             spawn_shipyard: KeyCode::Digit2,
+            spawn_outpost: KeyCode::Digit3,
             spawn_ship: KeyCode::KeyS,
             spawn_pirate: KeyCode::KeyP,
             reveal_all: KeyCode::KeyU,
@@ -309,7 +311,9 @@ fn handle_pause_toggle(
     bindings: Res<InputBindings>,
     mut config: ResMut<SimConfig>,
 ) {
-    if input.just_pressed(bindings.pause) {
+    let shift_held =
+        input.pressed(KeyCode::ShiftLeft) || input.pressed(KeyCode::ShiftRight);
+    if shift_held && input.just_pressed(bindings.pause) {
         config.paused = !config.paused;
         info!("Sim paused: {}", config.paused);
     }
@@ -449,7 +453,8 @@ mod tests {
 
         {
             let mut input = world.resource_mut::<ButtonInput<KeyCode>>();
-            input.press(KeyCode::Escape);
+            input.press(KeyCode::ShiftLeft);
+            input.press(KeyCode::KeyP);
         }
 
         let mut system_state: SystemState<(

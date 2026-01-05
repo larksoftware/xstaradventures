@@ -2,11 +2,14 @@ use bevy::prelude::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum StationKind {
+    // Player-buildable stations
     MiningOutpost,
     FuelDepot,
     SensorStation,
     Shipyard,
     Refinery,
+    // NPC-only stations
+    Outpost, // Independent trader station
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
@@ -220,6 +223,7 @@ pub fn station_build_time_seconds(kind: StationKind) -> f32 {
         StationKind::SensorStation => 90.0,
         StationKind::Shipyard => 240.0,
         StationKind::Refinery => 200.0,
+        StationKind::Outpost => 0.0, // Not player-buildable
     }
 }
 
@@ -230,6 +234,7 @@ pub fn station_fuel_capacity(kind: StationKind) -> f32 {
         StationKind::SensorStation => 40.0,
         StationKind::Shipyard => 50.0,
         StationKind::Refinery => 60.0,
+        StationKind::Outpost => 0.0, // Self-sufficient, doesn't track fuel
     }
 }
 
@@ -240,6 +245,7 @@ pub fn station_fuel_burn_per_minute(kind: StationKind) -> f32 {
         StationKind::SensorStation => 0.45,
         StationKind::Shipyard => 0.5,
         StationKind::Refinery => 0.4,
+        StationKind::Outpost => 0.0, // Self-sufficient
     }
 }
 
@@ -250,6 +256,7 @@ pub fn station_ore_capacity(kind: StationKind) -> f32 {
         StationKind::SensorStation => 0.0,
         StationKind::Shipyard => 100.0,
         StationKind::Refinery => 80.0,
+        StationKind::Outpost => 0.0, // Doesn't store ore
     }
 }
 
@@ -260,7 +267,73 @@ pub fn station_ore_production_per_minute(kind: StationKind) -> f32 {
         StationKind::SensorStation => 0.0,
         StationKind::Shipyard => 0.0,
         StationKind::Refinery => 0.0,
+        StationKind::Outpost => 0.0, // Doesn't produce ore
     }
+}
+
+/// Check if station kind is an NPC-owned type (not player-buildable).
+#[allow(dead_code)]
+pub fn is_npc_station(kind: StationKind) -> bool {
+    matches!(kind, StationKind::Outpost)
+}
+
+// =============================================================================
+// Outpost Trading
+// =============================================================================
+
+/// Outpost trading option for buying fuel
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
+pub struct OutpostBuyFuelOption {
+    pub fuel_amount: u32,
+    pub credit_cost: u32,
+}
+
+/// Outpost trading option for selling ore
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
+pub struct OutpostSellOreOption {
+    pub ore_amount: u32,
+    pub credit_reward: u32,
+}
+
+/// Available fuel purchase options at Outposts.
+/// Price ratio: 5 credits → 10 fuel (2 fuel per credit)
+#[allow(dead_code)]
+pub const OUTPOST_BUY_FUEL_OPTIONS: [OutpostBuyFuelOption; 3] = [
+    OutpostBuyFuelOption {
+        fuel_amount: 10,
+        credit_cost: 5,
+    },
+    OutpostBuyFuelOption {
+        fuel_amount: 25,
+        credit_cost: 12,
+    },
+    OutpostBuyFuelOption {
+        fuel_amount: 50,
+        credit_cost: 25,
+    },
+];
+
+/// Available ore selling options at Outposts.
+/// Price ratio: 5 ore → 10 credits (2 credits per ore)
+#[allow(dead_code)]
+pub const OUTPOST_SELL_ORE_OPTIONS: [OutpostSellOreOption; 2] = [
+    OutpostSellOreOption {
+        ore_amount: 5,
+        credit_reward: 10,
+    },
+    OutpostSellOreOption {
+        ore_amount: 10,
+        credit_reward: 20,
+    },
+];
+
+/// Calculate credit reward for selling a specific amount of ore.
+/// Rate: 2 credits per ore
+#[allow(dead_code)]
+pub fn outpost_ore_to_credits(ore: u32) -> u32 {
+    ore * 2
 }
 
 #[cfg(test)]
@@ -835,5 +908,89 @@ mod tests {
         assert_eq!(storage.free_slots(), 3);
         storage.add_scout();
         assert_eq!(storage.free_slots(), 2);
+    }
+
+    // =============================================================================
+    // Outpost tests (NPC station)
+    // =============================================================================
+
+    #[test]
+    fn outpost_has_zero_build_time() {
+        assert_eq!(station_build_time_seconds(StationKind::Outpost), 0.0);
+    }
+
+    #[test]
+    fn outpost_has_zero_fuel_capacity() {
+        assert_eq!(super::station_fuel_capacity(StationKind::Outpost), 0.0);
+    }
+
+    #[test]
+    fn outpost_has_zero_fuel_burn() {
+        assert_eq!(
+            super::station_fuel_burn_per_minute(StationKind::Outpost),
+            0.0
+        );
+    }
+
+    #[test]
+    fn outpost_has_zero_ore_capacity() {
+        assert_eq!(super::station_ore_capacity(StationKind::Outpost), 0.0);
+    }
+
+    #[test]
+    fn outpost_has_zero_ore_production() {
+        assert_eq!(
+            super::station_ore_production_per_minute(StationKind::Outpost),
+            0.0
+        );
+    }
+
+    #[test]
+    fn outpost_is_npc_station() {
+        assert!(super::is_npc_station(StationKind::Outpost));
+    }
+
+    #[test]
+    fn player_stations_are_not_npc() {
+        assert!(!super::is_npc_station(StationKind::MiningOutpost));
+        assert!(!super::is_npc_station(StationKind::FuelDepot));
+        assert!(!super::is_npc_station(StationKind::SensorStation));
+        assert!(!super::is_npc_station(StationKind::Shipyard));
+        assert!(!super::is_npc_station(StationKind::Refinery));
+    }
+
+    // =============================================================================
+    // Outpost trading tests
+    // =============================================================================
+
+    #[test]
+    fn outpost_buy_fuel_has_three_options() {
+        assert_eq!(super::OUTPOST_BUY_FUEL_OPTIONS.len(), 3);
+    }
+
+    #[test]
+    fn outpost_buy_fuel_first_option_is_10_fuel_5_credits() {
+        let option = super::OUTPOST_BUY_FUEL_OPTIONS[0];
+        assert_eq!(option.fuel_amount, 10);
+        assert_eq!(option.credit_cost, 5);
+    }
+
+    #[test]
+    fn outpost_sell_ore_has_two_options() {
+        assert_eq!(super::OUTPOST_SELL_ORE_OPTIONS.len(), 2);
+    }
+
+    #[test]
+    fn outpost_sell_ore_first_option_is_5_ore_10_credits() {
+        let option = super::OUTPOST_SELL_ORE_OPTIONS[0];
+        assert_eq!(option.ore_amount, 5);
+        assert_eq!(option.credit_reward, 10);
+    }
+
+    #[test]
+    fn outpost_ore_to_credits_rate_is_2x() {
+        assert_eq!(super::outpost_ore_to_credits(5), 10);
+        assert_eq!(super::outpost_ore_to_credits(10), 20);
+        assert_eq!(super::outpost_ore_to_credits(23), 46);
     }
 }

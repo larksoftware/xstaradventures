@@ -44,11 +44,19 @@ impl Plugin for SimPlugin {
                     stations::refinery_job_progress,
                     stations::station_job_loss_on_fail.after(stations::station_lifecycle),
                     scouts::scout_behavior.after(process_jump_transition),
+                )
+                    .run_if(sim_not_paused),
+            )
+            .add_systems(
+                FixedUpdate,
+                (
                     ore::spawn_ore_at_revealed_nodes,
                     boundary::check_boundary_warnings,
                     pirates::pirate_launches,
                     pirates::pirate_move,
-                    pirates::pirate_harassment,
+                    pirates::pirate_outpost_docking.after(pirates::pirate_move),
+                    pirates::pirate_dock_timer,
+                    pirates::pirate_harassment.after(pirates::pirate_outpost_docking),
                     ships::ship_fuel_burn,
                     ships::ship_fuel_alerts,
                     ships::ship_state_stub,

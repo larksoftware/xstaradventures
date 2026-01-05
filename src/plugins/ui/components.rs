@@ -176,6 +176,32 @@ pub struct DockingMenuCargoText;
 #[derive(Component)]
 pub struct DockingMenuUndockButton;
 
+/// Container for Outpost trading section
+#[derive(Component)]
+pub struct DockingMenuOutpostSection;
+
+/// Buy fuel button (Outpost)
+#[derive(Component)]
+pub struct DockingMenuBuyFuelButton {
+    pub fuel_amount: u32,
+    pub credit_cost: u32,
+}
+
+/// Sell ore button (Outpost)
+#[derive(Component)]
+pub struct DockingMenuSellOreButton {
+    pub ore_amount: u32,
+    pub credit_reward: u32,
+}
+
+/// Sell all ore button (Outpost)
+#[derive(Component)]
+pub struct DockingMenuSellAllOreButton;
+
+/// Text showing player credits
+#[derive(Component)]
+pub struct DockingMenuCreditsText;
+
 // =============================================================================
 // Debug Panel Components
 // =============================================================================

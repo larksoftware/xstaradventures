@@ -1,15 +1,15 @@
 use bevy::prelude::*;
 
 use crate::compat::SpatialBundle;
-
+use crate::factions::Faction;
 use crate::fleets::{RiskTolerance, ScoutBehavior};
 use crate::pirates::{PirateBase, PirateShip};
 use crate::plugins::core::{DebugWindow, EventLog, GameState, InputBindings};
 use crate::plugins::player::PlayerControl;
 use crate::plugins::sim::{BoundaryWarningState, SimTickCount};
 use crate::ships::{
-    cargo_capacity, ship_default_role, ship_fuel_capacity, Cargo, Fleet, Ship, ShipFuelAlert,
-    ShipKind, ShipState, Velocity,
+    cargo_capacity, ship_default_role, ship_fuel_capacity, Cargo, Credits, Fleet, Ship,
+    ShipFuelAlert, ShipKind, ShipState, Velocity,
 };
 use crate::stations::{
     station_build_time_seconds, station_fuel_capacity, Station, StationBuild, StationCrisisLog,
@@ -265,6 +265,11 @@ fn handle_debug_spawns(
         spawn_station_debug(&mut commands, node, StationKind::Shipyard);
     }
 
+    // Spawn Outpost with Shift+3
+    if input.just_pressed(bindings.spawn_outpost) {
+        spawn_outpost_debug(&mut commands, node);
+    }
+
     if input.just_pressed(bindings.spawn_ship) {
         spawn_ship_stub(&mut commands, node);
     }
@@ -363,7 +368,9 @@ fn spawn_player_ship(commands: &mut Commands, node: &SystemNode) {
             fuel_capacity: capacity,
         },
         Cargo::default(),
+        Credits::default(),
         Velocity::default(),
+        Faction::Player,
         PlayerControl,
         ShipFuelAlert::default(),
         BoundaryWarningState::default(),
@@ -392,6 +399,7 @@ fn spawn_ship_stub(commands: &mut Commands, node: &SystemNode) {
         Fleet {
             role: ship_default_role(ShipKind::Scout),
         },
+        Faction::Player,
         ScoutBehavior::new(node.id, RiskTolerance::Cautious),
         ShipFuelAlert::default(),
         ZoneId(node.id),
@@ -416,6 +424,7 @@ fn spawn_station_debug(commands: &mut Commands, node: &SystemNode, kind: Station
             fuel: capacity * 0.5,
             fuel_capacity: capacity,
         },
+        Faction::Player,
         StationBuild {
             remaining_seconds: build_time,
         },
@@ -430,9 +439,34 @@ fn spawn_station_debug(commands: &mut Commands, node: &SystemNode, kind: Station
     ));
 }
 
+/// Spawn an NPC Outpost at the given node (debug command)
+fn spawn_outpost_debug(commands: &mut Commands, node: &SystemNode) {
+    commands.spawn((
+        Station {
+            kind: StationKind::Outpost,
+            state: StationState::Operational,
+            fuel: 0.0,
+            fuel_capacity: 0.0,
+        },
+        Faction::Independent,
+        StationCrisisLog::default(),
+        ZoneId(node.id),
+        Name::new(format!("Outpost-Debug-{}", node.id)),
+        SpatialBundle::from_transform(Transform::from_xyz(
+            node.position.x + 30.0,
+            node.position.y - 50.0,
+            0.5,
+        )),
+    ));
+}
+
 fn spawn_pirate(commands: &mut Commands, node: &SystemNode) {
     commands.spawn((
-        PirateShip { speed: 70.0 },
+        PirateShip {
+            speed: 70.0,
+            behavior: crate::pirates::PirateShipBehavior::default(),
+        },
+        Faction::Pirate,
         ZoneId(node.id),
         Name::new("Pirate-Ship"),
         SpatialBundle::from_transform(Transform::from_xyz(
@@ -493,6 +527,7 @@ fn spawn_stations(commands: &mut Commands, sector: &Sector, rng: &mut u64) {
                 fuel: capacity * 0.5,
                 fuel_capacity: capacity,
             },
+            Faction::Player,
             StationCrisisLog::default(),
             ZoneId(node.id),
             Name::new(format!("Refinery-{}-{}", node.id, i)),
@@ -536,6 +571,7 @@ fn spawn_stations(commands: &mut Commands, sector: &Sector, rng: &mut u64) {
                 fuel: capacity * 0.5,
                 fuel_capacity: capacity,
             },
+            Faction::Player,
             StationCrisisLog::default(),
             ZoneId(node.id),
             Name::new(format!("Shipyard-{}-{}", node.id, i)),
@@ -546,6 +582,89 @@ fn spawn_stations(commands: &mut Commands, sector: &Sector, rng: &mut u64) {
             )),
         ));
     }
+
+    // Spawn Outposts (~40-50% of zones, including safe zones)
+    spawn_outposts(commands, sector, rng);
+}
+
+/// Spawn NPC Outposts across the sector
+fn spawn_outposts(commands: &mut Commands, sector: &Sector, rng: &mut u64) {
+    let safe_zones = get_safe_zones(sector);
+
+    // Guarantee at least one Outpost in a safe zone (starter area)
+    let safe_nodes: Vec<&SystemNode> = sector
+        .nodes
+        .iter()
+        .filter(|n| safe_zones.contains(&n.id))
+        .collect();
+
+    let mut outpost_zones = std::collections::HashSet::new();
+
+    // Spawn one guaranteed Outpost near starter
+    if let Some(&node) = safe_nodes.first() {
+        spawn_outpost_at(commands, node, 0, rng);
+        outpost_zones.insert(node.id);
+    }
+
+    // ~40-50% of remaining zones get Outposts
+    let target_ratio = 0.4 + next_unit(rng) * 0.1; // 0.4-0.5
+    let target_count = (sector.nodes.len() as f32 * target_ratio) as usize;
+    let remaining_count = target_count.saturating_sub(1); // Already placed one
+
+    let other_nodes: Vec<&SystemNode> = sector
+        .nodes
+        .iter()
+        .filter(|n| !outpost_zones.contains(&n.id))
+        .collect();
+
+    for (i, node) in other_nodes.iter().enumerate() {
+        if outpost_zones.len() >= target_count {
+            break;
+        }
+
+        // Random chance to place an Outpost
+        if next_unit(rng) < 0.45 {
+            spawn_outpost_at(commands, node, i + 1, rng);
+            outpost_zones.insert(node.id);
+        }
+    }
+
+    // Ensure we hit minimum target if we haven't yet
+    if outpost_zones.len() < remaining_count {
+        for node in other_nodes.iter() {
+            if outpost_zones.len() >= target_count {
+                break;
+            }
+            if !outpost_zones.contains(&node.id) {
+                spawn_outpost_at(commands, node, outpost_zones.len(), rng);
+                outpost_zones.insert(node.id);
+            }
+        }
+    }
+}
+
+fn spawn_outpost_at(commands: &mut Commands, node: &SystemNode, index: usize, rng: &mut u64) {
+    // Outposts are always Operational and don't consume fuel
+    let offset_x = -30.0 + next_unit(rng) * 60.0;
+    let offset_y = -80.0 - next_unit(rng) * 40.0;
+
+    commands.spawn((
+        Station {
+            kind: StationKind::Outpost,
+            state: StationState::Operational,
+            fuel: 0.0,
+            fuel_capacity: 0.0,
+        },
+        Faction::Independent,
+        StationCrisisLog::default(),
+        ZoneId(node.id),
+        Name::new(format!("Outpost-{}", index)),
+        SpatialBundle::from_transform(Transform::from_xyz(
+            node.position.x + offset_x,
+            node.position.y + offset_y,
+            0.5,
+        )),
+    ));
 }
 
 /// Returns the set of zone IDs that are within 1 jump of the starter zone
@@ -620,7 +739,11 @@ fn spawn_pirates(commands: &mut Commands, sector: &Sector, rng: &mut u64) {
             let offset_y = angle.sin() * radius;
 
             commands.spawn((
-                PirateShip { speed: 70.0 },
+                PirateShip {
+                    speed: 70.0,
+                    behavior: crate::pirates::PirateShipBehavior::default(),
+                },
+                Faction::Pirate,
                 ZoneId(node.id),
                 Name::new(format!("Pirate-Ship-{}-{}", node.id, i)),
                 SpatialBundle::from_transform(Transform::from_xyz(
@@ -639,6 +762,7 @@ fn spawn_pirates(commands: &mut Commands, sector: &Sector, rng: &mut u64) {
                     launch_interval_ticks: 300,
                     next_launch_tick: 120,
                 },
+                Faction::Pirate,
                 ZoneId(node.id),
                 Name::new(format!("Pirate-Base-{}", node.id)),
                 // 5x zone scale: offset 250, -150

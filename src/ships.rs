@@ -141,6 +141,41 @@ pub struct ShipFuelAlert {
     pub critical: bool,
 }
 
+/// Player credits for trading at Outposts.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct Credits {
+    pub amount: u32,
+}
+
+impl Default for Credits {
+    fn default() -> Self {
+        Self { amount: 50 } // Starting credits
+    }
+}
+
+#[allow(dead_code)]
+impl Credits {
+    /// Add credits to balance.
+    pub fn add(&mut self, amount: u32) {
+        self.amount = self.amount.saturating_add(amount);
+    }
+
+    /// Remove credits if sufficient balance. Returns true if successful.
+    pub fn try_spend(&mut self, amount: u32) -> bool {
+        if self.amount >= amount {
+            self.amount -= amount;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Check if player can afford a purchase.
+    pub fn can_afford(&self, amount: u32) -> bool {
+        self.amount >= amount
+    }
+}
+
 pub fn ship_default_role(kind: ShipKind) -> FleetRole {
     match kind {
         ShipKind::PlayerShip => FleetRole::Security,
@@ -594,5 +629,51 @@ mod tests {
         let mut cargo = Cargo::default();
         cargo.add_fuel(60.0);
         assert!((cargo.fuel_free_space() - 40.0).abs() < f32::EPSILON);
+    }
+
+    // =============================================================================
+    // Credits tests
+    // =============================================================================
+
+    #[test]
+    fn credits_default_is_50() {
+        let credits = super::Credits::default();
+        assert_eq!(credits.amount, 50);
+    }
+
+    #[test]
+    fn credits_add_increases_balance() {
+        let mut credits = super::Credits::default();
+        credits.add(25);
+        assert_eq!(credits.amount, 75);
+    }
+
+    #[test]
+    fn credits_try_spend_succeeds_when_sufficient() {
+        let mut credits = super::Credits::default();
+        let success = credits.try_spend(30);
+        assert!(success);
+        assert_eq!(credits.amount, 20);
+    }
+
+    #[test]
+    fn credits_try_spend_fails_when_insufficient() {
+        let mut credits = super::Credits::default();
+        let success = credits.try_spend(100);
+        assert!(!success);
+        assert_eq!(credits.amount, 50); // Unchanged
+    }
+
+    #[test]
+    fn credits_can_afford_returns_true_when_sufficient() {
+        let credits = super::Credits::default();
+        assert!(credits.can_afford(50));
+        assert!(credits.can_afford(25));
+    }
+
+    #[test]
+    fn credits_can_afford_returns_false_when_insufficient() {
+        let credits = super::Credits::default();
+        assert!(!credits.can_afford(100));
     }
 }

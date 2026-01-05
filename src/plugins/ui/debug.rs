@@ -51,6 +51,7 @@ pub fn setup_debug_panel(mut commands: Commands, asset_server: Res<AssetServer>)
                 node: debug_node,
                 background_color: debug_config.background_color.unwrap_or(Color::NONE).into(),
                 visibility: Visibility::Hidden,
+                z_index: ZIndex(100),
                 ..default()
             },
         ))
@@ -149,26 +150,16 @@ pub fn update_debug_panel(
                         nodes.iter().count()
                     ));
 
-                    body.push_str("\nDebug Keybinds:\n");
-                    body.push_str("  -/= : change seed\n");
-                    body.push_str("  V   : reveal adjacent\n");
-                    body.push_str("  U   : reveal all\n");
-                    body.push_str("  Z   : clear reveals\n");
-                    body.push_str("  B   : spawn fuel depot\n");
-                    body.push_str("  1   : spawn refinery\n");
-                    body.push_str("  2   : spawn shipyard\n");
-                    body.push_str("  S   : spawn scout\n");
-                    body.push_str("  P   : spawn pirate\n");
-                    body.push_str("  I   : refresh intel\n");
-                    body.push_str("  O   : advance intel\n");
-                    body.push_str("  K   : randomize modifiers\n");
-                    body.push_str("\nRender Toggles:\n");
-                    body.push_str("  N   : toggle nodes\n");
-                    body.push_str("  R   : toggle routes\n");
-                    body.push_str("  F   : toggle rings\n");
-                    body.push_str("  G   : toggle grid\n");
-                    body.push_str("  T   : toggle route labels\n");
-                    body.push_str("  Y   : toggle node labels\n");
+                    body.push_str("\nKeybinds (hold Shift):\n");
+                    body.push_str("  -/=  seed     V  reveal adj   U  reveal all\n");
+                    body.push_str("  Z    clear    I  intel        O  adv intel\n");
+                    body.push_str("  K    modifiers\n");
+                    body.push_str("\nSpawn:\n");
+                    body.push_str("  B  depot   1  refinery   2  shipyard   3  outpost\n");
+                    body.push_str("  S  scout   P  pirate\n");
+                    body.push_str("\nRender:\n");
+                    body.push_str("  N  nodes   R  routes   F  rings   G  grid\n");
+                    body.push_str("  T  route labels   Y  node labels\n");
 
                     text.0 = body;
                     break;

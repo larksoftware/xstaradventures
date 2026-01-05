@@ -6,16 +6,18 @@ use std::path::Path;
 
 use crate::compat::{NodeBundle, TextBundle, TextStyle};
 use crate::plugins::player::{DockingState, PlayerControl};
-use crate::ships::Cargo;
+use crate::ships::{Cargo, Credits, Ship};
 use crate::stations::{
-    RefineryJob, RefineryStorage, ShipyardJob, Station, StationKind, StationState,
+    outpost_ore_to_credits, RefineryJob, RefineryStorage, ShipyardJob, Station, StationKind,
+    StationState, OUTPOST_BUY_FUEL_OPTIONS, OUTPOST_SELL_ORE_OPTIONS,
 };
 
 use super::components::{
-    DockingMenuBuildScoutButton, DockingMenuCancelButton, DockingMenuCargoText,
-    DockingMenuCollectButton, DockingMenuCollectSection, DockingMenuConvertButton,
-    DockingMenuJobSection, DockingMenuJobText, DockingMenuRoot, DockingMenuStatus,
-    DockingMenuTitle, DockingMenuUndockButton,
+    DockingMenuBuildScoutButton, DockingMenuBuyFuelButton, DockingMenuCancelButton,
+    DockingMenuCargoText, DockingMenuCollectButton, DockingMenuCollectSection,
+    DockingMenuConvertButton, DockingMenuCreditsText, DockingMenuJobSection, DockingMenuJobText,
+    DockingMenuOutpostSection, DockingMenuRoot, DockingMenuSellAllOreButton,
+    DockingMenuSellOreButton, DockingMenuStatus, DockingMenuTitle, DockingMenuUndockButton,
 };
 
 // =============================================================================
@@ -259,6 +261,116 @@ pub fn setup_docking_menu(mut commands: Commands, asset_server: Res<AssetServer>
                     ));
                 });
 
+            // Outpost trading section (hidden by default)
+            parent
+                .spawn((
+                    DockingMenuOutpostSection,
+                    NodeBundle {
+                        node: UiNode {
+                            flex_direction: FlexDirection::Column,
+                            margin: UiRect::top(Val::Px(8.0)),
+                            ..default()
+                        },
+                        visibility: Visibility::Hidden,
+                        ..default()
+                    },
+                ))
+                .with_children(|outpost| {
+                    // BUY FUEL section
+                    outpost.spawn(TextBundle::from_section(
+                        "BUY FUEL",
+                        TextStyle {
+                            font: font.clone(),
+                            font_size: 13.0,
+                            color: Color::srgb(0.7, 0.7, 0.7),
+                        },
+                    ));
+
+                    for option in OUTPOST_BUY_FUEL_OPTIONS {
+                        outpost.spawn((
+                            DockingMenuBuyFuelButton {
+                                fuel_amount: option.fuel_amount,
+                                credit_cost: option.credit_cost,
+                            },
+                            Interaction::None,
+                            TextBundle::from_section(
+                                format!(
+                                    "> {} fuel for {} cr",
+                                    option.fuel_amount, option.credit_cost
+                                ),
+                                TextStyle {
+                                    font: font.clone(),
+                                    font_size: 13.0,
+                                    color: Color::srgb(0.4, 0.8, 0.4),
+                                },
+                            )
+                            .with_node(UiNode {
+                                margin: UiRect::vertical(Val::Px(2.0)),
+                                ..default()
+                            }),
+                        ));
+                    }
+
+                    // SELL ORE section
+                    outpost.spawn(
+                        TextBundle::from_section(
+                            "SELL ORE",
+                            TextStyle {
+                                font: font.clone(),
+                                font_size: 13.0,
+                                color: Color::srgb(0.7, 0.7, 0.7),
+                            },
+                        )
+                        .with_node(UiNode {
+                            margin: UiRect::top(Val::Px(8.0)),
+                            ..default()
+                        }),
+                    );
+
+                    for option in OUTPOST_SELL_ORE_OPTIONS {
+                        outpost.spawn((
+                            DockingMenuSellOreButton {
+                                ore_amount: option.ore_amount,
+                                credit_reward: option.credit_reward,
+                            },
+                            Interaction::None,
+                            TextBundle::from_section(
+                                format!(
+                                    "> {} ore -> {} cr",
+                                    option.ore_amount, option.credit_reward
+                                ),
+                                TextStyle {
+                                    font: font.clone(),
+                                    font_size: 13.0,
+                                    color: Color::srgb(0.8, 0.8, 0.4),
+                                },
+                            )
+                            .with_node(UiNode {
+                                margin: UiRect::vertical(Val::Px(2.0)),
+                                ..default()
+                            }),
+                        ));
+                    }
+
+                    // Sell ALL ore button
+                    outpost.spawn((
+                        DockingMenuSellAllOreButton,
+                        Interaction::None,
+                        TextBundle::from_section(
+                            "> SELL ALL ORE",
+                            TextStyle {
+                                font: font.clone(),
+                                font_size: 13.0,
+                                color: Color::srgb(0.8, 0.6, 0.3),
+                            },
+                        )
+                        .with_node(UiNode {
+                            margin: UiRect::vertical(Val::Px(2.0)),
+                            ..default()
+                        }),
+                    ));
+                });
+
             // Divider
             parent.spawn(NodeBundle {
                 node: UiNode {
@@ -271,7 +383,7 @@ pub fn setup_docking_menu(mut commands: Commands, asset_server: Res<AssetServer>
                 ..default()
             });
 
-            // Cargo display
+            // Cargo and credits display
             parent.spawn((
                 DockingMenuCargoText,
                 TextBundle::from_section(
@@ -282,6 +394,22 @@ pub fn setup_docking_menu(mut commands: Commands, asset_server: Res<AssetServer>
                         color: Color::srgb(0.6, 0.7, 0.8),
                     },
                 ),
+            ));
+
+            parent.spawn((
+                DockingMenuCreditsText,
+                TextBundle::from_section(
+                    "Credits: 50",
+                    TextStyle {
+                        font: font.clone(),
+                        font_size: 12.0,
+                        color: Color::srgb(0.8, 0.7, 0.4),
+                    },
+                )
+                .with_node(UiNode {
+                    margin: UiRect::top(Val::Px(4.0)),
+                    ..default()
+                }),
             ));
 
             // Divider
@@ -342,7 +470,7 @@ pub fn update_docking_menu_visibility(
 #[allow(clippy::too_many_arguments)]
 pub fn update_docking_menu_content(
     docking: Res<DockingState>,
-    player_query: Query<&Cargo, With<PlayerControl>>,
+    player_query: Query<(&Cargo, &Credits, &Ship), With<PlayerControl>>,
     stations: Query<(
         &Station,
         &Name,
@@ -367,6 +495,16 @@ pub fn update_docking_menu_content(
             Without<DockingMenuTitle>,
             Without<DockingMenuStatus>,
             Without<DockingMenuJobText>,
+        ),
+    >,
+    mut credits_text: Query<
+        &mut Text,
+        (
+            With<DockingMenuCreditsText>,
+            Without<DockingMenuTitle>,
+            Without<DockingMenuStatus>,
+            Without<DockingMenuJobText>,
+            Without<DockingMenuCargoText>,
         ),
     >,
     mut job_section: Query<&mut Visibility, With<DockingMenuJobSection>>,
@@ -401,6 +539,17 @@ pub fn update_docking_menu_content(
             Without<DockingMenuConvertButton>,
         ),
     >,
+    mut outpost_section: Query<
+        &mut Visibility,
+        (
+            With<DockingMenuOutpostSection>,
+            Without<DockingMenuJobSection>,
+            Without<DockingMenuCancelButton>,
+            Without<DockingMenuBuildScoutButton>,
+            Without<DockingMenuConvertButton>,
+            Without<DockingMenuCollectSection>,
+        ),
+    >,
 ) {
     let Some(station_entity) = docking.docked_at else {
         return;
@@ -412,13 +561,14 @@ pub fn update_docking_menu_content(
         return;
     };
 
-    let cargo = player_query.single().ok();
+    let player_data = player_query.single().ok();
 
     // Update title
     if let Ok(mut text) = title_text.single_mut() {
         let kind_str = match station.kind {
             StationKind::Shipyard => "SHIPYARD",
             StationKind::Refinery => "REFINERY",
+            StationKind::Outpost => "FRONTIER OUTPOST",
             _ => "STATION",
         };
         text.0 = format!("{} - {}", kind_str, name.as_str());
@@ -426,21 +576,27 @@ pub fn update_docking_menu_content(
 
     // Update status
     if let Ok(mut text) = status_text.single_mut() {
-        let status_str = match station.state {
-            StationState::Deploying => "Deploying...",
-            StationState::Operational => "Operational",
-            StationState::Strained => "Strained (job paused)",
-            StationState::Failing => "Failing (job paused)",
-            StationState::Failed => "Failed",
-        };
-        text.0 = format!("Status: {} | Fuel: {:.0}/{:.0}", status_str, station.fuel, station.fuel_capacity);
+        if matches!(station.kind, StationKind::Outpost) {
+            text.0 = "Status: Open for Trade".to_string();
+        } else {
+            let status_str = match station.state {
+                StationState::Deploying => "Deploying...",
+                StationState::Operational => "Operational",
+                StationState::Strained => "Strained (job paused)",
+                StationState::Failing => "Failing (job paused)",
+                StationState::Failed => "Failed",
+            };
+            text.0 = format!("Status: {} | Fuel: {:.0}/{:.0}", status_str, station.fuel, station.fuel_capacity);
+        }
     }
 
-    // Update job progress
+    let is_outpost = matches!(station.kind, StationKind::Outpost);
+
+    // Update job progress (not for Outpost)
     let has_job = shipyard_job.is_some() || refinery_job.is_some();
 
     if let Ok(mut vis) = job_section.single_mut() {
-        *vis = if has_job {
+        *vis = if has_job && !is_outpost {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -448,7 +604,7 @@ pub fn update_docking_menu_content(
     }
 
     if let Ok(mut vis) = cancel_btn.single_mut() {
-        *vis = if has_job {
+        *vis = if has_job && !is_outpost {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -504,13 +660,25 @@ pub fn update_docking_menu_content(
         };
     }
 
-    // Update cargo display
-    if let Ok(mut text) = cargo_text.single_mut() {
-        if let Some(cargo) = cargo {
+    // Show/hide outpost section (Outpost only)
+    if let Ok(mut vis) = outpost_section.single_mut() {
+        *vis = if is_outpost {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+
+    // Update cargo and credits display
+    if let Some((cargo, credits, ship)) = player_data {
+        if let Ok(mut text) = cargo_text.single_mut() {
             text.0 = format!(
                 "YOUR CARGO\nOre: {}/{}  Fuel: {:.0}/{:.0}",
-                cargo.ore, cargo.ore_capacity, cargo.fuel, cargo.fuel_capacity
+                cargo.ore, cargo.ore_capacity, ship.fuel, ship.fuel_capacity
             );
+        }
+        if let Ok(mut text) = credits_text.single_mut() {
+            text.0 = format!("Credits: {}", credits.amount);
         }
     }
 }
@@ -521,7 +689,7 @@ pub fn update_docking_menu_content(
 pub fn handle_docking_menu_clicks(
     mut commands: Commands,
     mut docking: ResMut<DockingState>,
-    mut player_query: Query<&mut Cargo, With<PlayerControl>>,
+    mut player_query: Query<(&mut Cargo, &mut Credits, &mut Ship), With<PlayerControl>>,
     mut stations: Query<(
         Entity,
         &mut Station,
@@ -537,6 +705,18 @@ pub fn handle_docking_menu_clicks(
     >,
     cancel_btn: Query<&Interaction, (With<DockingMenuCancelButton>, Changed<Interaction>)>,
     collect_btn: Query<&Interaction, (With<DockingMenuCollectButton>, Changed<Interaction>)>,
+    buy_fuel_btns: Query<
+        (&Interaction, &DockingMenuBuyFuelButton),
+        Changed<Interaction>,
+    >,
+    sell_ore_btns: Query<
+        (&Interaction, &DockingMenuSellOreButton),
+        Changed<Interaction>,
+    >,
+    sell_all_ore_btn: Query<
+        &Interaction,
+        (With<DockingMenuSellAllOreButton>, Changed<Interaction>),
+    >,
 ) {
     let Some(station_entity) = docking.docked_at else {
         return;
@@ -566,7 +746,7 @@ pub fn handle_docking_menu_clicks(
 
                 // Refund ore to player
                 if refund > 0 {
-                    if let Ok(mut cargo) = player_query.single_mut() {
+                    if let Ok((mut cargo, _, _)) = player_query.single_mut() {
                         cargo.add_ore(refund);
                     }
                 }
@@ -575,7 +755,7 @@ pub fn handle_docking_menu_clicks(
         }
     }
 
-    let Ok(mut cargo) = player_query.single_mut() else {
+    let Ok((mut cargo, mut credits, mut ship)) = player_query.single_mut() else {
         return;
     };
 
@@ -628,11 +808,58 @@ pub fn handle_docking_menu_clicks(
     for interaction in collect_btn.iter() {
         if matches!(interaction, Interaction::Pressed) {
             if let Ok((_, _, _, _, Some(mut storage))) = stations.get_mut(station_entity) {
-                let free_space = cargo.fuel_capacity - cargo.fuel;
+                let free_space = ship.fuel_capacity - ship.fuel;
                 let to_take = storage.fuel.min(free_space);
                 if to_take > 0.0 {
                     storage.fuel -= to_take;
-                    cargo.fuel += to_take;
+                    ship.fuel += to_take;
+                }
+            }
+            return;
+        }
+    }
+
+    // Handle buy fuel (Outpost)
+    for (interaction, buy_btn) in buy_fuel_btns.iter() {
+        if matches!(interaction, Interaction::Pressed) {
+            if let Ok((_, station, _, _, _)) = stations.get(station_entity) {
+                if matches!(station.kind, StationKind::Outpost) {
+                    // Check if player can afford and has cargo space
+                    let free_fuel_space = ship.fuel_capacity - ship.fuel;
+                    if credits.can_afford(buy_btn.credit_cost)
+                        && free_fuel_space >= buy_btn.fuel_amount as f32
+                    {
+                        credits.try_spend(buy_btn.credit_cost);
+                        ship.fuel += buy_btn.fuel_amount as f32;
+                    }
+                }
+            }
+            return;
+        }
+    }
+
+    // Handle sell ore (Outpost)
+    for (interaction, sell_btn) in sell_ore_btns.iter() {
+        if matches!(interaction, Interaction::Pressed) {
+            if let Ok((_, station, _, _, _)) = stations.get(station_entity) {
+                if matches!(station.kind, StationKind::Outpost) && cargo.ore >= sell_btn.ore_amount
+                {
+                    cargo.remove_ore(sell_btn.ore_amount);
+                    credits.add(sell_btn.credit_reward);
+                }
+            }
+            return;
+        }
+    }
+
+    // Handle sell all ore (Outpost)
+    for interaction in sell_all_ore_btn.iter() {
+        if matches!(interaction, Interaction::Pressed) {
+            if let Ok((_, station, _, _, _)) = stations.get(station_entity) {
+                if matches!(station.kind, StationKind::Outpost) && cargo.ore > 0 {
+                    let credit_reward = outpost_ore_to_credits(cargo.ore);
+                    cargo.ore = 0;
+                    credits.add(credit_reward);
                 }
             }
             return;

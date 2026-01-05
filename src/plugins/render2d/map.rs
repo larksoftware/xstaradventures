@@ -12,8 +12,8 @@ use crate::stations::{Station, StationKind};
 use crate::world::{KnowledgeLayer, Sector, SystemIntel, SystemNode, ZoneId};
 
 use super::components::{
-    find_node_position, layer_floor, layer_short, modifier_icon, risk_color, station_kind_short,
-    NodeLabel, NodeVisual, NodeVisualMarker, RouteLabel, StationMapLabel,
+    find_node_position, layer_floor, layer_short, modifier_icon, risk_color, station_kind_color,
+    station_kind_short, NodeLabel, NodeVisual, NodeVisualMarker, RouteLabel, StationMapLabel,
 };
 
 // =============================================================================
@@ -564,6 +564,14 @@ pub fn update_station_map_labels(
             .collect::<Vec<_>>()
             .join(" ");
 
+        // Use the first station's color (prioritize Outpost color if present)
+        let color = station_kinds
+            .iter()
+            .find(|k| matches!(k, StationKind::Outpost))
+            .or(station_kinds.first())
+            .map(|k| station_kind_color(*k))
+            .unwrap_or(Color::srgba(0.7, 0.85, 0.95, 0.9));
+
         // Position below the node (opposite of node labels which are above)
         let map_pos = *position + Vec2::new(0.0, -45.0);
         if let Ok(screen) = camera.world_to_viewport(camera_transform, map_pos.extend(0.0)) {
@@ -576,7 +584,7 @@ pub fn update_station_map_labels(
                     TextStyle {
                         font: font.clone(),
                         font_size: 12.0,
-                        color: Color::srgba(0.7, 0.85, 0.95, 0.9),
+                        color,
                     },
                 )
                 .with_node(UiNode {
