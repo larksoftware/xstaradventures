@@ -39,11 +39,7 @@ impl Plugin for Render2DPlugin {
             .add_systems(Startup, camera::setup_camera)
             .add_systems(
                 OnEnter(GameState::InGame),
-                (
-                    camera::track_player_camera,
-                    starfield::spawn_starfield,
-                )
-                    .chain(),
+                (camera::track_player_camera, starfield::spawn_starfield).chain(),
             )
             .add_systems(
                 Update,
@@ -62,6 +58,10 @@ impl Plugin for Render2DPlugin {
             )
             .add_systems(
                 Update,
+                camera::reset_map_view_on_enter.run_if(in_state(GameState::InGame)),
+            )
+            .add_systems(
+                Update,
                 (
                     map::clear_focus_marker_on_map,
                     map::spawn_node_visuals,
@@ -73,6 +73,7 @@ impl Plugin for Render2DPlugin {
                     map::update_node_labels,
                     map::update_station_map_labels,
                     map::update_hovered_node,
+                    effects::draw_current_zone_marker,
                     sync_view_entities,
                 )
                     .run_if(in_state(GameState::InGame))

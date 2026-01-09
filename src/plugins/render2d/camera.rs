@@ -159,7 +159,7 @@ pub fn sync_camera_view(
     for mut projection in projections.iter_mut() {
         if let Projection::Orthographic(orthographic) = &mut *projection {
             if orthographic.scale != scale {
-                info!(
+                debug!(
                     "sync_camera_view: Setting camera scale to {:.2} for {:?}",
                     scale, *view
                 );
@@ -277,6 +277,49 @@ pub fn handle_map_zoom_wheel(
     }
 }
 
+/// Reset zoom and pan to fit all revealed nodes when entering map mode
+pub fn reset_map_view_on_enter(
+    view: Res<ViewMode>,
+    mut zoom: ResMut<MapZoomOverride>,
+    mut pan: ResMut<MapPanOffset>,
+    nodes: Query<(&SystemNode, &SystemIntel)>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+) {
+    // Only run when view changes to Map
+    if !view.is_changed() || !matches!(*view, ViewMode::Map) {
+        return;
+    }
+
+    // Reset pan offset
+    pan.offset = Vec2::ZERO;
+
+    // Collect revealed node positions
+    let positions: Vec<Vec2> = nodes
+        .iter()
+        .filter_map(|(node, intel)| {
+            if intel.revealed {
+                Some(node.position)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if positions.is_empty() {
+        zoom.scale = MAP_ZOOM_DEFAULT;
+        return;
+    }
+
+    // Get window size for proper scaling
+    let window_size = match windows.single() {
+        Ok(window) => Vec2::new(window.width(), window.height()),
+        Err(_) => Vec2::new(1920.0, 1080.0), // Fallback
+    };
+
+    // Calculate and set the auto-zoom
+    zoom.scale = calculate_auto_zoom(&positions, window_size);
+}
+
 /// Handle right-click drag panning in map view
 pub fn handle_map_pan(
     mouse_button: Res<ButtonInput<MouseButton>>,
@@ -333,6 +376,52 @@ pub fn debug_window_open(debug_window: Res<DebugWindow>) -> bool {
 
 pub fn map_scale_for_window(_window: Option<&Window>, zoom: &MapZoomOverride) -> f32 {
     zoom.scale
+}
+
+/// Calculate the auto-zoom scale needed to fit all given positions within the window.
+/// Returns a scale value where higher = more zoomed out.
+/// Adds padding so nodes aren't right at the edge.
+pub fn calculate_auto_zoom(positions: &[Vec2], window_size: Vec2) -> f32 {
+    if positions.is_empty() {
+        return MAP_ZOOM_DEFAULT;
+    }
+
+    // For a single node, use a reasonable default zoom
+    if positions.len() == 1 {
+        return MAP_ZOOM_DEFAULT.clamp(MAP_ZOOM_MIN, MAP_ZOOM_MAX);
+    }
+
+    // Calculate bounding box
+    let mut min = positions[0];
+    let mut max = positions[0];
+    for pos in positions.iter() {
+        min.x = min.x.min(pos.x);
+        min.y = min.y.min(pos.y);
+        max.x = max.x.max(pos.x);
+        max.y = max.y.max(pos.y);
+    }
+
+    // Calculate the extent of the bounding box
+    let extent = max - min;
+
+    // Add 20% padding on each side (40% total)
+    let padded_extent = extent * 1.4;
+
+    // Calculate the scale needed to fit the padded extent
+    // Scale = world_size / screen_size (in orthographic projection)
+    // We need the larger of the two ratios (width or height)
+    let scale_x = padded_extent.x / window_size.x;
+    let scale_y = padded_extent.y / window_size.y;
+
+    // Use the larger scale to ensure everything fits
+    let required_scale = scale_x.max(scale_y);
+
+    // Ensure minimum visible size (don't zoom in too much for small spreads)
+    let min_extent_scale = 0.5; // At least show some area
+
+    required_scale
+        .max(min_extent_scale)
+        .clamp(MAP_ZOOM_MIN, MAP_ZOOM_MAX)
 }
 
 // =============================================================================
@@ -442,5 +531,38 @@ mod tests {
     fn map_zoom_label_shows_scale() {
         let zoom = MapZoomOverride::default();
         assert_eq!(zoom.label(), "1.50");
+    }
+
+    #[test]
+    fn auto_zoom_fits_single_node() {
+        // Single node at origin needs no special zoom
+        let positions = vec![Vec2::ZERO];
+        let window_size = Vec2::new(1920.0, 1080.0);
+        let zoom = calculate_auto_zoom(&positions, window_size);
+        // Should be clamped to reasonable range
+        assert!(zoom >= MAP_ZOOM_MIN && zoom <= MAP_ZOOM_MAX);
+    }
+
+    #[test]
+    fn auto_zoom_scales_for_spread_nodes() {
+        // Nodes spread 1000 units apart need more zoom out
+        let positions = vec![Vec2::new(-500.0, 0.0), Vec2::new(500.0, 0.0)];
+        let window_size = Vec2::new(1920.0, 1080.0);
+        let zoom = calculate_auto_zoom(&positions, window_size);
+        // Should zoom out enough to see both nodes
+        assert!(zoom > MAP_ZOOM_MIN);
+    }
+
+    #[test]
+    fn auto_zoom_increases_for_wider_spread() {
+        let positions_small = vec![Vec2::new(-100.0, -100.0), Vec2::new(100.0, 100.0)];
+        let positions_large = vec![Vec2::new(-500.0, -500.0), Vec2::new(500.0, 500.0)];
+        let window_size = Vec2::new(1920.0, 1080.0);
+
+        let zoom_small = calculate_auto_zoom(&positions_small, window_size);
+        let zoom_large = calculate_auto_zoom(&positions_large, window_size);
+
+        // Larger spread needs more zoom out (higher scale value)
+        assert!(zoom_large > zoom_small);
     }
 }

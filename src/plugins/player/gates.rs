@@ -7,7 +7,7 @@ use crate::plugins::core::{EventLog, InputBindings};
 use crate::plugins::sim::SimTickCount;
 use crate::ships::Ship;
 use crate::world::{
-    JumpGate, JumpTransition, SystemIntel, SystemNode, ZoneId, JUMP_GATE_FUEL_COST,
+    Identified, JumpGate, JumpTransition, SystemIntel, SystemNode, ZoneId, JUMP_GATE_FUEL_COST,
     JUMP_TRANSITION_SECONDS,
 };
 
@@ -40,30 +40,36 @@ pub fn player_activate_jump_gate(
     bindings: Res<InputBindings>,
     mut commands: Commands,
     mut log: ResMut<EventLog>,
-    mut player_query: Query<(Entity, &Transform, &mut Ship), With<PlayerControl>>,
-    gates: Query<(&Transform, &JumpGate)>,
+    mut player_query: Query<(Entity, &Transform, &mut Ship, &ZoneId), With<PlayerControl>>,
+    gates: Query<(&Transform, &JumpGate, &ZoneId)>,
 ) {
     if !input.just_pressed(bindings.interact) {
         return;
     }
 
-    let (player_entity, player_transform, mut ship) = match player_query.single_mut() {
-        Ok(value) => value,
-        Err(_) => {
-            return;
-        }
-    };
+    let (player_entity, player_transform, mut ship, player_zone) =
+        match player_query.single_mut() {
+            Ok(value) => value,
+            Err(_) => {
+                return;
+            }
+        };
 
     let player_pos = Vec2::new(
         player_transform.translation.x,
         player_transform.translation.y,
     );
 
-    // Find nearest gate in range
+    // Find nearest gate in range that's in the player's zone
     let mut nearest_gate: Option<&JumpGate> = None;
     let mut nearest_dist = f32::MAX;
 
-    for (gate_transform, gate) in gates.iter() {
+    for (gate_transform, gate, gate_zone) in gates.iter() {
+        // Only consider gates in the player's current zone
+        if gate_zone.0 != player_zone.0 {
+            continue;
+        }
+
         let gate_pos = Vec2::new(gate_transform.translation.x, gate_transform.translation.y);
         let dist = gate_pos.distance(player_pos);
 
@@ -109,11 +115,15 @@ pub fn process_jump_transition(
         Option<&ScoutBehavior>,
     )>,
     mut intel_query: Query<(&SystemNode, &mut SystemIntel)>,
+    gates: Query<(Entity, &JumpGate, Option<&ZoneId>), Without<JumpTransition>>,
 ) {
     for (entity, mut zone_id, mut transition, player_ctrl, scout) in jumping_ships.iter_mut() {
         transition.remaining_seconds -= time.delta_secs();
 
         if transition.remaining_seconds <= 0.0 {
+            // Remember source zone before changing
+            let source_zone = zone_id.0;
+
             // Complete the jump
             let destination = transition.destination_zone;
             zone_id.0 = destination;
@@ -129,6 +139,18 @@ pub fn process_jump_transition(
                         intel.confidence = if player_ctrl.is_some() { 0.8 } else { 0.5 };
                         intel.last_seen_tick = ticks.tick;
                         intel.revealed_tick = ticks.tick;
+                    }
+                }
+            }
+
+            // Mark the arrival gate (gate leading back to source) as Identified for player
+            if player_ctrl.is_some() {
+                for (gate_entity, gate, gate_zone) in gates.iter() {
+                    // Find the gate in the destination zone that leads back to source
+                    let in_destination_zone = gate_zone.is_some_and(|z| z.0 == destination);
+                    let leads_to_source = gate.destination_zone == source_zone;
+                    if in_destination_zone && leads_to_source {
+                        commands.entity(gate_entity).insert(Identified);
                     }
                 }
             }
