@@ -212,8 +212,6 @@ pub fn track_player_camera(
             camera_transform.translation.x = player_transform.translation.x;
             camera_transform.translation.y = player_transform.translation.y;
         }
-    } else {
-        info!("track_player_camera: No player found!");
     }
 }
 

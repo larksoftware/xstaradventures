@@ -19,30 +19,39 @@ pub struct Starfield {
 // Systems
 // =============================================================================
 
-pub fn spawn_starfield(mut commands: Commands) {
+pub fn spawn_starfield(
+    mut commands: Commands,
+    player: Query<&Transform, With<crate::plugins::player::PlayerControl>>,
+) {
+    // Get player position to spawn stars around it, or use origin as fallback
+    let (center_x, center_y) = player
+        .iter()
+        .next()
+        .map(|t| (t.translation.x, t.translation.y))
+        .unwrap_or((0.0, 0.0));
+
     let mut rng_state = 42u64; // Simple LCG seed
 
-    // Helper function to generate pseudo-random values
+    // Helper function to generate pseudo-random values in [0, 1)
     let mut next_random = || -> f32 {
         rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
-        let value = (rng_state >> 33) as u32;
+        // Use top 32 bits for full [0, 1) range
+        let value = (rng_state >> 32) as u32;
         (value as f32) / (u32::MAX as f32)
     };
 
-    // Spawn stars across entire game world area
-    // Game world is -600 to 600, -360 to 360
-    // Spawn in much wider area to ensure coverage everywhere
-    let min_x = -1200.0;
-    let max_x = 1200.0;
-    let min_y = -700.0;
-    let max_y = 700.0;
+    // Tile size must be slightly larger than the viewport so stars wrap
+    // just as they leave the screen. At 4K (3840x2160) with scale 0.6,
+    // viewport is ~2304x1296. Using ~1.5x viewport for tile.
+    let half_tile_x = 1800.0; // tile_x = 3600
+    let half_tile_y = 1100.0; // tile_y = 2200
 
-    // Layer 1: Distant stars (smallest, dimmest, slowest parallax)
+    // Layer 1: Distant stars (smallest, dimmest)
     for _ in 0..200 {
-        let x = min_x + next_random() * (max_x - min_x);
-        let y = min_y + next_random() * (max_y - min_y);
-        let brightness = 0.3 + next_random() * 0.3; // 0.3-0.6
-        let size = 1.0 + next_random() * 1.0; // 1.0-2.0 pixels
+        let x = center_x + (-half_tile_x + next_random() * (half_tile_x * 2.0));
+        let y = center_y + (-half_tile_y + next_random() * (half_tile_y * 2.0));
+        let brightness = 0.3 + next_random() * 0.3;
+        let size = 1.0 + next_random() * 1.0;
 
         commands.spawn((
             Starfield { layer: 1 },
@@ -59,14 +68,12 @@ pub fn spawn_starfield(mut commands: Commands) {
         ));
     }
 
-    // Layer 2: Mid-distance stars (medium size, medium brightness)
+    // Layer 2: Mid-distance stars
     for _ in 0..150 {
-        let x = min_x + next_random() * (max_x - min_x);
-        let y = min_y + next_random() * (max_y - min_y);
-        let brightness = 0.5 + next_random() * 0.4; // 0.5-0.9
-        let size = 1.5 + next_random() * 1.5; // 1.5-3.0 pixels
-
-        // Vary color slightly (white to light blue)
+        let x = center_x + (-half_tile_x + next_random() * (half_tile_x * 2.0));
+        let y = center_y + (-half_tile_y + next_random() * (half_tile_y * 2.0));
+        let brightness = 0.5 + next_random() * 0.4;
+        let size = 1.5 + next_random() * 1.5;
         let blue_tint = next_random() * 0.2;
         let color = Color::srgba(brightness, brightness, brightness + blue_tint, 1.0);
 
@@ -85,20 +92,17 @@ pub fn spawn_starfield(mut commands: Commands) {
         ));
     }
 
-    // Layer 3: Close stars (larger, brighter, more parallax)
+    // Layer 3: Close stars (larger, brighter)
     for _ in 0..80 {
-        let x = min_x + next_random() * (max_x - min_x);
-        let y = min_y + next_random() * (max_y - min_y);
-        let brightness = 0.7 + next_random() * 0.3; // 0.7-1.0
-        let size = 2.0 + next_random() * 2.0; // 2.0-4.0 pixels
+        let x = center_x + (-half_tile_x + next_random() * (half_tile_x * 2.0));
+        let y = center_y + (-half_tile_y + next_random() * (half_tile_y * 2.0));
+        let brightness = 0.7 + next_random() * 0.3;
+        let size = 2.0 + next_random() * 2.0;
 
-        // Some stars have color variation (blue, yellow-white)
         let color_type = next_random();
         let color = if color_type < 0.7 {
-            // White/blue-white
             Color::srgba(brightness, brightness, brightness * 1.2, 1.0)
         } else {
-            // Yellow-white
             Color::srgba(brightness, brightness * 0.95, brightness * 0.8, 1.0)
         };
 
@@ -135,45 +139,49 @@ pub fn toggle_starfield_visibility(
 }
 
 pub fn wrap_starfield(
-    camera: Query<&Transform, With<Camera2d>>,
-    mut stars: Query<&mut Transform, (With<Starfield>, Without<Camera2d>)>,
+    player: Query<&Transform, With<crate::plugins::player::PlayerControl>>,
+    mut stars: Query<&mut Transform, (With<Starfield>, Without<crate::plugins::player::PlayerControl>)>,
 ) {
-    let camera_transform = match camera.iter().next() {
-        Some(transform) => transform,
+    // Use player position directly - more reliable than camera which may lag
+    let player_transform = match player.iter().next() {
+        Some(p) => p,
         None => return,
     };
 
-    let camera_x = camera_transform.translation.x;
-    let camera_y = camera_transform.translation.y;
+    let center_x = player_transform.translation.x;
+    let center_y = player_transform.translation.y;
 
-    // Wrap distance - teleport stars when they get this far from camera
-    // Viewport is ~768x432 at scale 0.6, so wrap at ~1.5x viewport to ensure coverage
-    let wrap_x = 600.0;
-    let wrap_y = 350.0;
-    // Tile size should be 2x wrap distance for seamless wrapping
-    let tile_x = 1200.0;
-    let tile_y = 700.0;
+    // Tile size - must match spawn area for consistent density
+    // Sized to be slightly larger than 4K viewport at scale 0.6 (~2304x1296)
+    let tile_x = 3600.0;
+    let tile_y = 2200.0;
+    let half_tile_x = tile_x / 2.0;
+    let half_tile_y = tile_y / 2.0;
 
     for mut star_transform in stars.iter_mut() {
-        let dx = star_transform.translation.x - camera_x;
-        let dy = star_transform.translation.y - camera_y;
+        // Calculate offset from player
+        let dx = star_transform.translation.x - center_x;
+        let dy = star_transform.translation.y - center_y;
 
-        // If star is too far left, move it to the right
-        if dx < -wrap_x {
-            star_transform.translation.x += tile_x;
-        }
-        // If star is too far right, move it to the left
-        else if dx > wrap_x {
-            star_transform.translation.x -= tile_x;
-        }
+        // Use modulo to wrap into [-half_tile, half_tile] range
+        // This guarantees stars stay within bounds regardless of distance traveled
+        let wrapped_dx = ((dx % tile_x) + tile_x + half_tile_x) % tile_x - half_tile_x;
+        let wrapped_dy = ((dy % tile_y) + tile_y + half_tile_y) % tile_y - half_tile_y;
 
-        // If star is too far down, move it up
-        if dy < -wrap_y {
-            star_transform.translation.y += tile_y;
-        }
-        // If star is too far up, move it down
-        else if dy > wrap_y {
-            star_transform.translation.y -= tile_y;
-        }
+        star_transform.translation.x = center_x + wrapped_dx;
+        star_transform.translation.y = center_y + wrapped_dy;
+    }
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn starfield_module_compiles() {
+        // Basic compile test
+        assert!(true);
     }
 }

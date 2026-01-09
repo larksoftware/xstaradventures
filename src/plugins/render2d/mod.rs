@@ -37,7 +37,14 @@ impl Plugin for Render2DPlugin {
             .init_resource::<effects::HomeBeaconEnabled>()
             .add_systems(Startup, entities::load_player_ship_texture)
             .add_systems(Startup, camera::setup_camera)
-            .add_systems(Startup, starfield::spawn_starfield)
+            .add_systems(
+                OnEnter(GameState::InGame),
+                (
+                    camera::track_player_camera,
+                    starfield::spawn_starfield,
+                )
+                    .chain(),
+            )
             .add_systems(
                 Update,
                 starfield::wrap_starfield
