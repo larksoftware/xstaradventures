@@ -5,7 +5,9 @@
       "Bash(find:*)",
       "Bash(cargo clippy:*)",
       "Bash(cargo fmt:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(magick:*)",
+      "Bash(cargo run:*)"
     ]
   }
 }
