@@ -44,7 +44,9 @@ mod tests {
 
     #[test]
     fn pirate_behavior_docked_tracks_ticks() {
-        let behavior = PirateShipBehavior::DockedAtOutpost { ticks_remaining: 100 };
+        let behavior = PirateShipBehavior::DockedAtOutpost {
+            ticks_remaining: 100,
+        };
         if let PirateShipBehavior::DockedAtOutpost { ticks_remaining } = behavior {
             assert_eq!(ticks_remaining, 100);
         } else {
@@ -55,6 +57,9 @@ mod tests {
     #[test]
     fn pirate_behavior_roaming_is_not_docked() {
         let behavior = PirateShipBehavior::Roaming;
-        assert!(!matches!(behavior, PirateShipBehavior::DockedAtOutpost { .. }));
+        assert!(!matches!(
+            behavior,
+            PirateShipBehavior::DockedAtOutpost { .. }
+        ));
     }
 }

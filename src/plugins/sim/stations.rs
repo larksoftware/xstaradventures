@@ -5,7 +5,10 @@ use bevy::prelude::*;
 use crate::compat::SpatialBundle;
 use crate::fleets::{RiskTolerance, ScoutBehavior};
 use crate::plugins::core::EventLog;
-use crate::ships::{cargo_capacity, ship_fuel_capacity, Cargo, Fleet, Ship, ShipFuelAlert, ShipKind, ShipState, ship_default_role};
+use crate::ships::{
+    cargo_capacity, ship_default_role, ship_fuel_capacity, Cargo, Fleet, Ship, ShipFuelAlert,
+    ShipKind, ShipState,
+};
 use crate::stations::{
     station_fuel_burn_per_minute, station_ore_production_per_minute, CrisisStage, CrisisType,
     RefineryJob, RefineryStorage, ShipyardJob, Station, StationBuild, StationCrisis,
@@ -258,7 +261,12 @@ pub fn refinery_job_progress(
     time: Res<Time<Fixed>>,
     mut commands: Commands,
     mut log: ResMut<EventLog>,
-    mut stations: Query<(Entity, &Station, &mut RefineryJob, Option<&mut RefineryStorage>)>,
+    mut stations: Query<(
+        Entity,
+        &Station,
+        &mut RefineryJob,
+        Option<&mut RefineryStorage>,
+    )>,
 ) {
     let delta_seconds = time.delta_secs();
 
@@ -285,7 +293,10 @@ pub fn refinery_job_progress(
             }
 
             commands.entity(entity).remove::<RefineryJob>();
-            log.push(format!("Refinery: Converted ore to {:.0} fuel", fuel_produced));
+            log.push(format!(
+                "Refinery: Converted ore to {:.0} fuel",
+                fuel_produced
+            ));
         }
     }
 }
@@ -596,7 +607,13 @@ mod tests {
             Res<Time<Fixed>>,
             Commands,
             ResMut<EventLog>,
-            Query<(Entity, &Station, &Transform, &ZoneId, &mut super::ShipyardJob)>,
+            Query<(
+                Entity,
+                &Station,
+                &Transform,
+                &ZoneId,
+                &mut super::ShipyardJob,
+            )>,
         )> = SystemState::new(&mut world);
         let (time, commands, log, stations) = system_state.get_mut(&mut world);
         super::shipyard_job_progress(time, commands, log, stations);
@@ -638,7 +655,12 @@ mod tests {
             Res<Time<Fixed>>,
             Commands,
             ResMut<EventLog>,
-            Query<(Entity, &Station, &mut super::RefineryJob, Option<&mut super::RefineryStorage>)>,
+            Query<(
+                Entity,
+                &Station,
+                &mut super::RefineryJob,
+                Option<&mut super::RefineryStorage>,
+            )>,
         )> = SystemState::new(&mut world);
         let (time, commands, log, stations) = system_state.get_mut(&mut world);
         super::refinery_job_progress(time, commands, log, stations);
@@ -678,7 +700,12 @@ mod tests {
         let mut system_state: SystemState<(
             Commands,
             ResMut<EventLog>,
-            Query<(Entity, &Station, Option<&super::ShipyardJob>, Option<&super::RefineryJob>)>,
+            Query<(
+                Entity,
+                &Station,
+                Option<&super::ShipyardJob>,
+                Option<&super::RefineryJob>,
+            )>,
         )> = SystemState::new(&mut world);
         let (commands, log, stations) = system_state.get_mut(&mut world);
         super::station_job_loss_on_fail(commands, log, stations);

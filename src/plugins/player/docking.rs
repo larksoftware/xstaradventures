@@ -47,10 +47,7 @@ pub fn player_dock_station(
 
     for (entity, transform, station) in stations.iter() {
         // Only Shipyard and Refinery are dockable
-        if !matches!(
-            station.kind,
-            StationKind::Shipyard | StationKind::Refinery
-        ) {
+        if !matches!(station.kind, StationKind::Shipyard | StationKind::Refinery) {
             continue;
         }
 
@@ -68,10 +65,7 @@ pub fn player_dock_station(
 }
 
 /// Handles undocking when player presses Escape or clicks undock button.
-pub fn player_undock(
-    input: Res<ButtonInput<KeyCode>>,
-    mut docking: ResMut<DockingState>,
-) {
+pub fn player_undock(input: Res<ButtonInput<KeyCode>>, mut docking: ResMut<DockingState>) {
     if !docking.is_docked() {
         return;
     }

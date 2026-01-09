@@ -140,7 +140,13 @@ pub fn toggle_starfield_visibility(
 
 pub fn wrap_starfield(
     player: Query<&Transform, With<crate::plugins::player::PlayerControl>>,
-    mut stars: Query<&mut Transform, (With<Starfield>, Without<crate::plugins::player::PlayerControl>)>,
+    mut stars: Query<
+        &mut Transform,
+        (
+            With<Starfield>,
+            Without<crate::plugins::player::PlayerControl>,
+        ),
+    >,
 ) {
     // Use player position directly - more reliable than camera which may lag
     let player_transform = match player.iter().next() {

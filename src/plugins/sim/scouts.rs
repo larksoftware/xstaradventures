@@ -94,7 +94,9 @@ pub fn scout_behavior(
 
     let delta_seconds = time.delta_secs();
 
-    for (scout_entity, mut ship, mut transform, mut behavior, zone_id, jump_transition) in scouts.iter_mut() {
+    for (scout_entity, mut ship, mut transform, mut behavior, zone_id, jump_transition) in
+        scouts.iter_mut()
+    {
         if matches!(ship.state, ShipState::Disabled) {
             continue;
         }

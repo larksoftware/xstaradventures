@@ -255,9 +255,12 @@ impl ScoutBehavior {
     /// Check if all contacts have been processed (identified or skipped)
     #[allow(dead_code)]
     pub fn all_contacts_processed(&self) -> bool {
-        self.contacts
-            .iter()
-            .all(|c| matches!(c.status, ContactStatus::Investigated | ContactStatus::Skipped))
+        self.contacts.iter().all(|c| {
+            matches!(
+                c.status,
+                ContactStatus::Investigated | ContactStatus::Skipped
+            )
+        })
     }
 
     /// Transition to investigation phase after scan completes

@@ -31,10 +31,7 @@ pub const SCOUT_BUILD_COST: u32 = 15;
 pub const SCOUT_BUILD_TIME: f32 = 120.0;
 
 /// Ore conversion options: (ore_in, fuel_out, time_seconds)
-pub const REFINERY_OPTIONS: [(u32, f32, f32); 2] = [
-    (5, 10.0, 60.0),
-    (10, 20.0, 90.0),
-];
+pub const REFINERY_OPTIONS: [(u32, f32, f32); 2] = [(5, 10.0, 60.0), (10, 20.0, 90.0)];
 
 // =============================================================================
 // Setup Systems
@@ -187,7 +184,10 @@ pub fn setup_docking_menu(mut commands: Commands, asset_server: Res<AssetServer>
                 DockingMenuBuildScoutButton,
                 Interaction::None,
                 TextBundle::from_section(
-                    format!("Build Scout ({} ore, {}s)", SCOUT_BUILD_COST, SCOUT_BUILD_TIME as u32),
+                    format!(
+                        "Build Scout ({} ore, {}s)",
+                        SCOUT_BUILD_COST, SCOUT_BUILD_TIME as u32
+                    ),
                     TextStyle {
                         font: font.clone(),
                         font_size: 13.0,
@@ -206,7 +206,10 @@ pub fn setup_docking_menu(mut commands: Commands, asset_server: Res<AssetServer>
                     DockingMenuConvertButton { ore_amount: ore_in },
                     Interaction::None,
                     TextBundle::from_section(
-                        format!("Convert {} ore -> {} fuel ({}s)", ore_in, fuel_out as u32, time as u32),
+                        format!(
+                            "Convert {} ore -> {} fuel ({}s)",
+                            ore_in, fuel_out as u32, time as u32
+                        ),
                         TextStyle {
                             font: font.clone(),
                             font_size: 13.0,
@@ -510,7 +513,10 @@ pub fn update_docking_menu_content(
     mut job_section: Query<&mut Visibility, With<DockingMenuJobSection>>,
     mut cancel_btn: Query<
         &mut Visibility,
-        (With<DockingMenuCancelButton>, Without<DockingMenuJobSection>),
+        (
+            With<DockingMenuCancelButton>,
+            Without<DockingMenuJobSection>,
+        ),
     >,
     mut build_btn: Query<
         &mut Visibility,
@@ -586,7 +592,10 @@ pub fn update_docking_menu_content(
                 StationState::Failing => "Failing (job paused)",
                 StationState::Failed => "Failed",
             };
-            text.0 = format!("Status: {} | Fuel: {:.0}/{:.0}", status_str, station.fuel, station.fuel_capacity);
+            text.0 = format!(
+                "Status: {} | Fuel: {:.0}/{:.0}",
+                status_str, station.fuel, station.fuel_capacity
+            );
         }
     }
 
@@ -699,20 +708,11 @@ pub fn handle_docking_menu_clicks(
     )>,
     undock_btn: Query<&Interaction, (With<DockingMenuUndockButton>, Changed<Interaction>)>,
     build_btn: Query<&Interaction, (With<DockingMenuBuildScoutButton>, Changed<Interaction>)>,
-    convert_btns: Query<
-        (&Interaction, &DockingMenuConvertButton),
-        Changed<Interaction>,
-    >,
+    convert_btns: Query<(&Interaction, &DockingMenuConvertButton), Changed<Interaction>>,
     cancel_btn: Query<&Interaction, (With<DockingMenuCancelButton>, Changed<Interaction>)>,
     collect_btn: Query<&Interaction, (With<DockingMenuCollectButton>, Changed<Interaction>)>,
-    buy_fuel_btns: Query<
-        (&Interaction, &DockingMenuBuyFuelButton),
-        Changed<Interaction>,
-    >,
-    sell_ore_btns: Query<
-        (&Interaction, &DockingMenuSellOreButton),
-        Changed<Interaction>,
-    >,
+    buy_fuel_btns: Query<(&Interaction, &DockingMenuBuyFuelButton), Changed<Interaction>>,
+    sell_ore_btns: Query<(&Interaction, &DockingMenuSellOreButton), Changed<Interaction>>,
     sell_all_ore_btn: Query<
         &Interaction,
         (With<DockingMenuSellAllOreButton>, Changed<Interaction>),

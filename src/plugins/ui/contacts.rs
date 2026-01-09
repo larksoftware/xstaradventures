@@ -7,7 +7,9 @@ use crate::compat::TextBundle;
 use crate::compat::TextStyle;
 use crate::plugins::player::NearbyTargets;
 
-use super::components::{contact_item_color, ContactItem, ContactsEmptyText, ContactsListContainer};
+use super::components::{
+    contact_item_color, ContactItem, ContactsEmptyText, ContactsListContainer,
+};
 
 // =============================================================================
 // Systems

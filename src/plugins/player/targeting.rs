@@ -28,12 +28,39 @@ pub fn view_is_world(view: Res<ViewMode>) -> bool {
 pub fn scan_nearby_entities(
     mut targets: ResMut<NearbyTargets>,
     player_query: Query<(&Transform, &ZoneId), With<PlayerControl>>,
-    stations: Query<(Entity, &Transform, &Name, Option<&ZoneId>, Option<&Identified>), With<Station>>,
+    stations: Query<
+        (
+            Entity,
+            &Transform,
+            &Name,
+            Option<&ZoneId>,
+            Option<&Identified>,
+        ),
+        With<Station>,
+    >,
     ore_nodes: Query<(Entity, &Transform, Option<&ZoneId>, Option<&Identified>), With<OreNode>>,
     pirates: Query<(Entity, &Transform, Option<&ZoneId>, Option<&Identified>), With<PirateShip>>,
-    pirate_bases: Query<(Entity, &Transform, Option<&ZoneId>, Option<&Identified>), With<PirateBase>>,
-    ships: Query<(Entity, &Transform, &Ship, Option<&ZoneId>, Option<&Identified>), Without<PlayerControl>>,
-    jump_gates: Query<(Entity, &Transform, &JumpGate, Option<&ZoneId>, Option<&Identified>)>,
+    pirate_bases: Query<
+        (Entity, &Transform, Option<&ZoneId>, Option<&Identified>),
+        With<PirateBase>,
+    >,
+    ships: Query<
+        (
+            Entity,
+            &Transform,
+            &Ship,
+            Option<&ZoneId>,
+            Option<&Identified>,
+        ),
+        Without<PlayerControl>,
+    >,
+    jump_gates: Query<(
+        Entity,
+        &Transform,
+        &JumpGate,
+        Option<&ZoneId>,
+        Option<&Identified>,
+    )>,
 ) {
     // Verify player exists and has a zone
     let Ok((player_transform, player_zone)) = player_query.single() else {

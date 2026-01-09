@@ -311,8 +311,7 @@ fn handle_pause_toggle(
     bindings: Res<InputBindings>,
     mut config: ResMut<SimConfig>,
 ) {
-    let shift_held =
-        input.pressed(KeyCode::ShiftLeft) || input.pressed(KeyCode::ShiftRight);
+    let shift_held = input.pressed(KeyCode::ShiftLeft) || input.pressed(KeyCode::ShiftRight);
     if shift_held && input.just_pressed(bindings.pause) {
         config.paused = !config.paused;
         info!("Sim paused: {}", config.paused);
