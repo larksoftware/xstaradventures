@@ -1,9 +1,11 @@
-//! Visual effects: focus marker, tactical navigation, home beacon.
+//! Visual effects: focus marker, tactical navigation, home beacon, current zone marker.
 
 use bevy::prelude::*;
 
 use crate::plugins::player::{NearbyTargets, PlayerControl};
-use crate::world::SystemIntel;
+use crate::world::{Sector, SystemIntel, ZoneId};
+
+use super::components::find_node_position;
 
 use super::map::FocusMarker;
 
@@ -268,4 +270,82 @@ pub fn draw_home_beacon(
             beacon_color,
         );
     }
+}
+
+/// Draws a distinctive marker around the player's current zone on the map view.
+pub fn draw_current_zone_marker(
+    mut gizmos: Gizmos,
+    sector: Res<Sector>,
+    player_query: Query<&ZoneId, With<PlayerControl>>,
+) {
+    let player_zone = match player_query.single() {
+        Ok(zone) => zone.0,
+        Err(_) => return,
+    };
+
+    let position = match find_node_position(&sector.nodes, player_zone) {
+        Some(pos) => pos,
+        None => return,
+    };
+
+    // Draw a bright "YOU ARE HERE" indicator - golden/yellow pulsing ring
+    let marker_color = Color::srgba(1.0, 0.85, 0.2, 0.9);
+    let inner_radius = 30.0;
+    let outer_radius = 38.0;
+
+    // Draw double ring for visibility
+    gizmos.circle_2d(position, inner_radius, marker_color);
+    gizmos.circle_2d(position, outer_radius, marker_color);
+
+    // Draw corner brackets to emphasize current location
+    let bracket_size = 44.0;
+    let corner_len = 12.0;
+
+    // Top-left
+    gizmos.line_2d(
+        position + Vec2::new(-bracket_size, bracket_size),
+        position + Vec2::new(-bracket_size + corner_len, bracket_size),
+        marker_color,
+    );
+    gizmos.line_2d(
+        position + Vec2::new(-bracket_size, bracket_size),
+        position + Vec2::new(-bracket_size, bracket_size - corner_len),
+        marker_color,
+    );
+
+    // Top-right
+    gizmos.line_2d(
+        position + Vec2::new(bracket_size, bracket_size),
+        position + Vec2::new(bracket_size - corner_len, bracket_size),
+        marker_color,
+    );
+    gizmos.line_2d(
+        position + Vec2::new(bracket_size, bracket_size),
+        position + Vec2::new(bracket_size, bracket_size - corner_len),
+        marker_color,
+    );
+
+    // Bottom-left
+    gizmos.line_2d(
+        position + Vec2::new(-bracket_size, -bracket_size),
+        position + Vec2::new(-bracket_size + corner_len, -bracket_size),
+        marker_color,
+    );
+    gizmos.line_2d(
+        position + Vec2::new(-bracket_size, -bracket_size),
+        position + Vec2::new(-bracket_size, -bracket_size + corner_len),
+        marker_color,
+    );
+
+    // Bottom-right
+    gizmos.line_2d(
+        position + Vec2::new(bracket_size, -bracket_size),
+        position + Vec2::new(bracket_size - corner_len, -bracket_size),
+        marker_color,
+    );
+    gizmos.line_2d(
+        position + Vec2::new(bracket_size, -bracket_size),
+        position + Vec2::new(bracket_size, -bracket_size + corner_len),
+        marker_color,
+    );
 }

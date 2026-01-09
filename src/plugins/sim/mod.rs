@@ -113,7 +113,7 @@ fn tick_simulation(mut counter: ResMut<SimTickCount>, sector: Res<Sector>) {
 
         let modifier_risk = zone_modifier_risk(&sector);
 
-        info!(
+        debug!(
             "Sim tick {} (nodes: {}, routes: {}, distance: {:.2}, endpoints: {}, risk: {:.2}, mod: {:.2})",
             counter.tick,
             sector.nodes.len(),
