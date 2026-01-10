@@ -109,14 +109,17 @@ pub fn process_jump_transition(
     mut jumping_ships: Query<(
         Entity,
         &mut ZoneId,
+        &mut Transform,
         &mut JumpTransition,
         Option<&PlayerControl>,
         Option<&ScoutBehavior>,
     )>,
     mut intel_query: Query<(&SystemNode, &mut SystemIntel)>,
-    gates: Query<(Entity, &JumpGate, Option<&ZoneId>), Without<JumpTransition>>,
+    gates: Query<(Entity, &Transform, &JumpGate, Option<&ZoneId>), Without<JumpTransition>>,
 ) {
-    for (entity, mut zone_id, mut transition, player_ctrl, scout) in jumping_ships.iter_mut() {
+    for (entity, mut zone_id, mut ship_transform, mut transition, player_ctrl, scout) in
+        jumping_ships.iter_mut()
+    {
         transition.remaining_seconds -= time.delta_secs();
 
         if transition.remaining_seconds <= 0.0 {
@@ -142,15 +145,21 @@ pub fn process_jump_transition(
                 }
             }
 
-            // Mark the arrival gate (gate leading back to source) as Identified for player
-            if player_ctrl.is_some() {
-                for (gate_entity, gate, gate_zone) in gates.iter() {
-                    // Find the gate in the destination zone that leads back to source
-                    let in_destination_zone = gate_zone.is_some_and(|z| z.0 == destination);
-                    let leads_to_source = gate.destination_zone == source_zone;
-                    if in_destination_zone && leads_to_source {
+            // Find the arrival gate (gate in destination zone leading back to source)
+            // and move the ship to its position, mark it as Identified for player
+            for (gate_entity, gate_transform, gate, gate_zone) in gates.iter() {
+                let in_destination_zone = gate_zone.is_some_and(|z| z.0 == destination);
+                let leads_to_source = gate.destination_zone == source_zone;
+                if in_destination_zone && leads_to_source {
+                    // Move the ship to the arrival gate position
+                    ship_transform.translation.x = gate_transform.translation.x;
+                    ship_transform.translation.y = gate_transform.translation.y;
+
+                    // Mark as Identified for player
+                    if player_ctrl.is_some() {
                         commands.entity(gate_entity).insert(Identified);
                     }
+                    break;
                 }
             }
 
