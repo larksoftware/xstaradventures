@@ -777,7 +777,8 @@ fn spawn_pirates(commands: &mut Commands, sector: &Sector, rng: &mut u64) {
 }
 
 /// Distance from node center to place gate (scaled for 5x zone size)
-const GATE_OFFSET: f32 = 300.0;
+/// Gates are placed near the edge of the playable zone (soft warning at 6000)
+const GATE_OFFSET: f32 = 5000.0;
 
 fn spawn_jump_gates(commands: &mut Commands, nodes: &[SystemNode], routes: &[RouteEdge]) {
     // Create a map of node id -> node for quick lookup
