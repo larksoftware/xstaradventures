@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use std::path::Path;
 
 use crate::compat::{SpriteBundle, Text2dBundle, TextStyle};
-use crate::ore::{OreKind, OreNode};
+use crate::ore::{Asteroid, OreKind, OreNode};
 use crate::pirates::{PirateBase, PirateShip};
 use crate::plugins::player::PlayerControl;
 use crate::ships::{Ship, ShipKind};
@@ -14,11 +14,11 @@ use crate::world::{JumpGate, ZoneId};
 
 use super::components::{
     is_visible_in_zone, ship_kind_short, ship_state_short, station_kind_color, station_kind_short,
-    JumpGateSpawnFilter, JumpGateVisual, JumpGateVisualMarker, OreSpawnFilter, OreVisual,
-    OreVisualMarker, PirateBaseSpawnFilter, PirateBaseVisual, PirateBaseVisualMarker,
-    PirateShipSpawnFilter, PirateShipVisual, PirateShipVisualMarker, ShipLabel, ShipSpawnFilter,
-    ShipVisual, ShipVisualMarker, StationLabel, StationSpawnFilter, StationVisual,
-    StationVisualMarker,
+    AsteroidSpawnFilter, AsteroidVisual, AsteroidVisualMarker, JumpGateSpawnFilter,
+    JumpGateVisual, JumpGateVisualMarker, OreSpawnFilter, OreVisual, OreVisualMarker,
+    PirateBaseSpawnFilter, PirateBaseVisual, PirateBaseVisualMarker, PirateShipSpawnFilter,
+    PirateShipVisual, PirateShipVisualMarker, ShipLabel, ShipSpawnFilter, ShipVisual,
+    ShipVisualMarker, StationLabel, StationSpawnFilter, StationVisual, StationVisualMarker,
 };
 
 // =============================================================================
@@ -324,6 +324,85 @@ pub fn update_ore_visuals(
                     }
                 }
             };
+        }
+    }
+}
+
+pub fn spawn_asteroid_visuals(
+    mut commands: Commands,
+    player_query: Query<&ZoneId, With<PlayerControl>>,
+    asteroids: Query<(Entity, &Transform, &Asteroid, Option<&ZoneId>), AsteroidSpawnFilter>,
+    asteroid_texture: Res<AsteroidTexture>,
+    asset_server: Res<AssetServer>,
+) {
+    let texture_ready = matches!(
+        asset_server.get_load_state(&asteroid_texture.0),
+        Some(LoadState::Loaded)
+    );
+    if !texture_ready {
+        return;
+    }
+
+    let player_zone = player_query.single().map(|z| z.0).ok();
+
+    for (entity, transform, asteroid, zone) in asteroids.iter() {
+        // Mark the asteroid as having a visual (to prevent duplicate spawning)
+        commands.entity(entity).insert(AsteroidVisualMarker);
+
+        // Determine initial visibility based on zone
+        let visible = match (player_zone, zone) {
+            (Some(pz), Some(az)) => az.0 == pz,
+            (Some(_), None) => true,
+            (None, _) => true,
+        };
+
+        // Scale the asteroid size based on the size field
+        let base_size = ASTEROID_SIZE;
+        let scaled_size = base_size * asteroid.size;
+
+        let sprite = SpriteBundle {
+            sprite: Sprite {
+                image: asteroid_texture.0.clone(),
+                color: Color::srgb(0.5, 0.45, 0.4), // Darker gray for decorative
+                custom_size: Some(scaled_size),
+                ..default()
+            },
+            transform: *transform,
+            visibility: if visible {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
+            ..default()
+        };
+
+        commands.spawn((AsteroidVisual { target: entity }, sprite));
+    }
+}
+
+#[allow(clippy::type_complexity)]
+pub fn sync_asteroid_visuals(
+    mut commands: Commands,
+    mut params: ParamSet<(
+        Query<(Entity, &AsteroidVisual, &mut Transform)>,
+        Query<(Entity, &Transform), With<Asteroid>>,
+    )>,
+) {
+    let asteroid_transforms = {
+        let asteroids = params.p1();
+        let mut map = std::collections::HashMap::new();
+        for (entity, transform) in asteroids.iter() {
+            map.insert(entity, *transform);
+        }
+        map
+    };
+
+    let mut visuals = params.p0();
+    for (visual_entity, visual, mut transform) in visuals.iter_mut() {
+        if let Some(asteroid_transform) = asteroid_transforms.get(&visual.target) {
+            *transform = *asteroid_transform;
+        } else {
+            commands.entity(visual_entity).despawn();
         }
     }
 }
@@ -722,6 +801,7 @@ pub fn sync_zone_visibility(
     // Query zones for simulation entities
     stations: Query<(Entity, Option<&ZoneId>), With<Station>>,
     ores: Query<(Entity, Option<&ZoneId>), With<OreNode>>,
+    asteroids: Query<(Entity, Option<&ZoneId>), With<Asteroid>>,
     pirate_bases: Query<(Entity, Option<&ZoneId>), With<PirateBase>>,
     pirate_ships: Query<(Entity, Option<&ZoneId>), With<PirateShip>>,
     ships: Query<(Entity, Option<&ZoneId>), With<Ship>>,
@@ -729,15 +809,20 @@ pub fn sync_zone_visibility(
     // Query visuals to update visibility
     mut station_visuals: Query<(&StationVisual, &mut Visibility)>,
     mut ore_visuals: Query<(&OreVisual, &mut Visibility), Without<StationVisual>>,
+    mut asteroid_visuals: Query<
+        (&AsteroidVisual, &mut Visibility),
+        (Without<StationVisual>, Without<OreVisual>),
+    >,
     mut pirate_base_visuals: Query<
         (&PirateBaseVisual, &mut Visibility),
-        (Without<StationVisual>, Without<OreVisual>),
+        (Without<StationVisual>, Without<OreVisual>, Without<AsteroidVisual>),
     >,
     mut pirate_ship_visuals: Query<
         (&PirateShipVisual, &mut Visibility),
         (
             Without<StationVisual>,
             Without<OreVisual>,
+            Without<AsteroidVisual>,
             Without<PirateBaseVisual>,
         ),
     >,
@@ -746,6 +831,7 @@ pub fn sync_zone_visibility(
         (
             Without<StationVisual>,
             Without<OreVisual>,
+            Without<AsteroidVisual>,
             Without<PirateBaseVisual>,
             Without<PirateShipVisual>,
         ),
@@ -755,6 +841,7 @@ pub fn sync_zone_visibility(
         (
             Without<StationVisual>,
             Without<OreVisual>,
+            Without<AsteroidVisual>,
             Without<PirateBaseVisual>,
             Without<PirateShipVisual>,
             Without<ShipVisual>,
@@ -773,6 +860,9 @@ pub fn sync_zone_visibility(
 
     let ore_zones: std::collections::HashMap<Entity, Option<u32>> =
         ores.iter().map(|(e, z)| (e, z.map(|z| z.0))).collect();
+
+    let asteroid_zones: std::collections::HashMap<Entity, Option<u32>> =
+        asteroids.iter().map(|(e, z)| (e, z.map(|z| z.0))).collect();
 
     let pirate_base_zones: std::collections::HashMap<Entity, Option<u32>> = pirate_bases
         .iter()
@@ -809,6 +899,20 @@ pub fn sync_zone_visibility(
     // Update ore visuals
     for (visual, mut visibility) in ore_visuals.iter_mut() {
         let visible = match ore_zones.get(&visual.target) {
+            Some(&Some(zone)) => zone == player_zone,
+            Some(&None) => true,
+            None => false,
+        };
+        *visibility = if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+
+    // Update asteroid visuals
+    for (visual, mut visibility) in asteroid_visuals.iter_mut() {
+        let visible = match asteroid_zones.get(&visual.target) {
             Some(&Some(zone)) => zone == player_zone,
             Some(&None) => true,
             None => false,

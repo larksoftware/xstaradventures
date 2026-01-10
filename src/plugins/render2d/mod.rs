@@ -16,9 +16,9 @@ use crate::plugins::core::{GameState, ViewMode};
 // Re-export public types
 pub use camera::{MapPanOffset, MapZoomOverride};
 pub use components::{
-    JumpGateVisual, NodeLabel, NodeVisual, NodeVisualMarker, OreVisual, PirateBaseVisual,
-    PirateShipVisual, RouteLabel, ShipLabel, ShipVisual, ShipVisualMarker, StationLabel,
-    StationVisual,
+    AsteroidVisual, JumpGateVisual, NodeLabel, NodeVisual, NodeVisualMarker, OreVisual,
+    PirateBaseVisual, PirateShipVisual, RouteLabel, ShipLabel, ShipVisual, ShipVisualMarker,
+    StationLabel, StationVisual,
 };
 pub use map::{FocusMarker, IntelRefreshCooldown, RenderToggles};
 
@@ -115,6 +115,8 @@ impl Plugin for Render2DPlugin {
                         entities::spawn_ore_visuals,
                         entities::sync_ore_visuals,
                         entities::update_ore_visuals,
+                        entities::spawn_asteroid_visuals,
+                        entities::sync_asteroid_visuals,
                     ),
                     (
                         entities::spawn_pirate_base_visuals,
@@ -177,11 +179,12 @@ fn sync_view_entities(
     node_visuals: Query<(Entity, &NodeVisual)>,
     node_labels: Query<Entity, With<NodeLabel>>,
     route_labels: Query<Entity, With<RouteLabel>>,
-    station_visuals: Query<Entity, With<StationVisual>>,
+    station_visuals: Query<(Entity, &StationVisual)>,
     station_labels: Query<Entity, With<StationLabel>>,
-    ore_visuals: Query<Entity, With<OreVisual>>,
-    pirate_base_visuals: Query<Entity, With<PirateBaseVisual>>,
-    pirate_ship_visuals: Query<Entity, With<PirateShipVisual>>,
+    ore_visuals: Query<(Entity, &OreVisual)>,
+    asteroid_visuals: Query<(Entity, &AsteroidVisual)>,
+    pirate_base_visuals: Query<(Entity, &PirateBaseVisual)>,
+    pirate_ship_visuals: Query<(Entity, &PirateShipVisual)>,
     ship_visuals: Query<(Entity, &ShipVisual)>,
     ship_labels: Query<Entity, With<ShipLabel>>,
     jump_gate_visuals: Query<(Entity, &JumpGateVisual)>,
@@ -200,19 +203,37 @@ fn sync_view_entities(
             }
         }
         ViewMode::Map => {
-            for entity in station_visuals.iter() {
+            for (entity, visual) in station_visuals.iter() {
+                commands
+                    .entity(visual.target)
+                    .remove::<components::StationVisualMarker>();
                 commands.entity(entity).despawn();
             }
             for entity in station_labels.iter() {
                 commands.entity(entity).despawn();
             }
-            for entity in ore_visuals.iter() {
+            for (entity, visual) in ore_visuals.iter() {
+                commands
+                    .entity(visual.target)
+                    .remove::<components::OreVisualMarker>();
                 commands.entity(entity).despawn();
             }
-            for entity in pirate_base_visuals.iter() {
+            for (entity, visual) in asteroid_visuals.iter() {
+                commands
+                    .entity(visual.target)
+                    .remove::<components::AsteroidVisualMarker>();
                 commands.entity(entity).despawn();
             }
-            for entity in pirate_ship_visuals.iter() {
+            for (entity, visual) in pirate_base_visuals.iter() {
+                commands
+                    .entity(visual.target)
+                    .remove::<components::PirateBaseVisualMarker>();
+                commands.entity(entity).despawn();
+            }
+            for (entity, visual) in pirate_ship_visuals.iter() {
+                commands
+                    .entity(visual.target)
+                    .remove::<components::PirateShipVisualMarker>();
                 commands.entity(entity).despawn();
             }
             for (entity, visual) in ship_visuals.iter() {

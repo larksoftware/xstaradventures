@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 
-use crate::ore::OreNode;
+use crate::ore::{Asteroid, OreNode};
 use crate::pirates::{PirateBase, PirateShip};
 use crate::plugins::core::FogConfig;
 use crate::ships::ShipKind;
@@ -12,6 +12,7 @@ use crate::world::{JumpGate, KnowledgeLayer, Sector, SystemNode, ZoneModifier};
 // Type aliases for complex query filter combinations
 pub type StationSpawnFilter = (With<Station>, Without<StationVisualMarker>);
 pub type OreSpawnFilter = (With<OreNode>, Without<OreVisualMarker>);
+pub type AsteroidSpawnFilter = (With<Asteroid>, Without<AsteroidVisualMarker>);
 pub type PirateBaseSpawnFilter = (With<PirateBase>, Without<PirateBaseVisualMarker>);
 pub type PirateShipSpawnFilter = (With<PirateShip>, Without<PirateShipVisualMarker>);
 pub type ShipSpawnFilter = (
@@ -80,6 +81,14 @@ pub struct OreVisual {
 
 #[derive(Component)]
 pub struct OreVisualMarker;
+
+#[derive(Component)]
+pub struct AsteroidVisual {
+    pub target: Entity,
+}
+
+#[derive(Component)]
+pub struct AsteroidVisualMarker;
 
 #[derive(Component)]
 pub struct PirateBaseVisual {

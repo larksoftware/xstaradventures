@@ -20,7 +20,6 @@ pub struct OreNode {
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct Asteroid {
     /// Visual size multiplier (0.5 to 1.5)
-    #[allow(dead_code)] // Used by renderer once asteroid rendering is implemented
     pub size: f32,
 }
 
