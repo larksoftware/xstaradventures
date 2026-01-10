@@ -9,15 +9,16 @@ use crate::ore::{OreKind, OreNode};
 use crate::pirates::{PirateBase, PirateShip};
 use crate::plugins::player::PlayerControl;
 use crate::ships::{Ship, ShipKind};
-use crate::stations::Station;
-use crate::world::ZoneId;
+use crate::stations::{Station, StationKind};
+use crate::world::{JumpGate, ZoneId};
 
 use super::components::{
     is_visible_in_zone, ship_kind_short, ship_state_short, station_kind_color, station_kind_short,
-    OreSpawnFilter, OreVisual, OreVisualMarker, PirateBaseSpawnFilter, PirateBaseVisual,
-    PirateBaseVisualMarker, PirateShipSpawnFilter, PirateShipVisual, PirateShipVisualMarker,
-    ShipLabel, ShipSpawnFilter, ShipVisual, ShipVisualMarker, StationLabel, StationSpawnFilter,
-    StationVisual, StationVisualMarker,
+    JumpGateSpawnFilter, JumpGateVisual, JumpGateVisualMarker, OreSpawnFilter, OreVisual,
+    OreVisualMarker, PirateBaseSpawnFilter, PirateBaseVisual, PirateBaseVisualMarker,
+    PirateShipSpawnFilter, PirateShipVisual, PirateShipVisualMarker, ShipLabel, ShipSpawnFilter,
+    ShipVisual, ShipVisualMarker, StationLabel, StationSpawnFilter, StationVisual,
+    StationVisualMarker,
 };
 
 // =============================================================================
@@ -28,12 +29,25 @@ const PLAYER_SHIP_ASPECT: f32 = 860.0 / 1065.0;
 const PLAYER_SHIP_WIDTH: f32 = 120.0;
 const PLAYER_SHIP_SIZE: Vec2 = Vec2::new(PLAYER_SHIP_WIDTH, PLAYER_SHIP_WIDTH * PLAYER_SHIP_ASPECT);
 
+const STAR_GATE_SIZE: Vec2 = Vec2::new(80.0, 80.0);
+const ASTEROID_SIZE: Vec2 = Vec2::new(28.0, 28.0);
+const FUEL_DEPOT_SIZE: Vec2 = Vec2::new(64.0, 64.0);
+
 // =============================================================================
 // Resources
 // =============================================================================
 
 #[derive(Resource)]
 pub struct PlayerShipTexture(pub Handle<Image>);
+
+#[derive(Resource)]
+pub struct StarGateTexture(pub Handle<Image>);
+
+#[derive(Resource)]
+pub struct AsteroidTexture(pub Handle<Image>);
+
+#[derive(Resource)]
+pub struct FuelDepotTexture(pub Handle<Image>);
 
 // =============================================================================
 // Systems
@@ -44,14 +58,41 @@ pub fn load_player_ship_texture(mut commands: Commands, asset_server: Res<AssetS
     commands.insert_resource(PlayerShipTexture(texture));
 }
 
+pub fn load_star_gate_texture(mut commands: Commands, asset_server: Res<AssetServer>) {
+    let texture = asset_server.load("sprites/star_gate.png");
+    commands.insert_resource(StarGateTexture(texture));
+}
+
+pub fn load_asteroid_texture(mut commands: Commands, asset_server: Res<AssetServer>) {
+    let texture = asset_server.load("sprites/asteroid.png");
+    commands.insert_resource(AsteroidTexture(texture));
+}
+
+pub fn load_fuel_depot_texture(mut commands: Commands, asset_server: Res<AssetServer>) {
+    let texture = asset_server.load("sprites/fuel_depot.png");
+    commands.insert_resource(FuelDepotTexture(texture));
+}
+
 pub fn spawn_station_visuals(
     mut commands: Commands,
     player_query: Query<&ZoneId, With<PlayerControl>>,
-    stations: Query<(Entity, &Transform, Option<&ZoneId>), StationSpawnFilter>,
+    stations: Query<(Entity, &Transform, &Station, Option<&ZoneId>), StationSpawnFilter>,
+    fuel_depot_texture: Res<FuelDepotTexture>,
+    asset_server: Res<AssetServer>,
 ) {
+    let depot_texture_ready = matches!(
+        asset_server.get_load_state(&fuel_depot_texture.0),
+        Some(LoadState::Loaded)
+    );
+
     let player_zone = player_query.single().map(|z| z.0).ok();
 
-    for (entity, transform, zone) in stations.iter() {
+    for (entity, transform, station, zone) in stations.iter() {
+        // Skip FuelDepot if texture not ready yet
+        if matches!(station.kind, StationKind::FuelDepot) && !depot_texture_ready {
+            continue;
+        }
+
         // Mark the station as having a visual (to prevent duplicate spawning)
         commands.entity(entity).insert(StationVisualMarker);
 
@@ -62,19 +103,35 @@ pub fn spawn_station_visuals(
             (None, _) => true,
         };
 
-        let sprite = SpriteBundle {
-            sprite: Sprite {
-                color: Color::srgb(0.85, 0.8, 0.35),
-                custom_size: Some(Vec2::new(10.0, 10.0)),
+        let visibility = if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+
+        let sprite = if matches!(station.kind, StationKind::FuelDepot) {
+            SpriteBundle {
+                sprite: Sprite {
+                    image: fuel_depot_texture.0.clone(),
+                    color: Color::WHITE,
+                    custom_size: Some(FUEL_DEPOT_SIZE),
+                    ..default()
+                },
+                transform: *transform,
+                visibility,
                 ..default()
-            },
-            transform: *transform,
-            visibility: if visible {
-                Visibility::Inherited
-            } else {
-                Visibility::Hidden
-            },
-            ..default()
+            }
+        } else {
+            SpriteBundle {
+                sprite: Sprite {
+                    color: Color::srgb(0.85, 0.8, 0.35),
+                    custom_size: Some(Vec2::new(10.0, 10.0)),
+                    ..default()
+                },
+                transform: *transform,
+                visibility,
+                ..default()
+            }
         };
 
         commands.spawn((StationVisual { target: entity }, sprite));
@@ -169,7 +226,17 @@ pub fn spawn_ore_visuals(
     mut commands: Commands,
     player_query: Query<&ZoneId, With<PlayerControl>>,
     ores: Query<(Entity, &Transform, Option<&ZoneId>), OreSpawnFilter>,
+    asteroid_texture: Res<AsteroidTexture>,
+    asset_server: Res<AssetServer>,
 ) {
+    let texture_ready = matches!(
+        asset_server.get_load_state(&asteroid_texture.0),
+        Some(LoadState::Loaded)
+    );
+    if !texture_ready {
+        return;
+    }
+
     let player_zone = player_query.single().map(|z| z.0).ok();
 
     for (entity, transform, zone) in ores.iter() {
@@ -185,8 +252,9 @@ pub fn spawn_ore_visuals(
 
         let sprite = SpriteBundle {
             sprite: Sprite {
-                color: Color::srgb(0.75, 0.6, 0.35),
-                custom_size: Some(Vec2::new(6.0, 6.0)),
+                image: asteroid_texture.0.clone(),
+                color: Color::WHITE,
+                custom_size: Some(ASTEROID_SIZE),
                 ..default()
             },
             transform: *transform,
@@ -378,6 +446,84 @@ pub fn sync_pirate_ship_visuals(
     for (visual_entity, visual, mut transform) in visuals.iter_mut() {
         if let Some(ship_transform) = ship_transforms.get(&visual.target) {
             *transform = *ship_transform;
+        } else {
+            commands.entity(visual_entity).despawn();
+        }
+    }
+}
+
+pub fn spawn_jump_gate_visuals(
+    mut commands: Commands,
+    player_query: Query<&ZoneId, With<PlayerControl>>,
+    gates: Query<(Entity, &Transform, Option<&ZoneId>), JumpGateSpawnFilter>,
+    gate_texture: Res<StarGateTexture>,
+    asset_server: Res<AssetServer>,
+) {
+    let texture_ready = matches!(
+        asset_server.get_load_state(&gate_texture.0),
+        Some(LoadState::Loaded)
+    );
+    if !texture_ready {
+        return;
+    }
+
+    let player_zone = player_query.single().map(|z| z.0).ok();
+
+    for (entity, transform, zone) in gates.iter() {
+        commands.entity(entity).insert(JumpGateVisualMarker);
+
+        let visible = match (player_zone, zone) {
+            (Some(pz), Some(gz)) => gz.0 == pz,
+            (Some(_), None) => true,
+            (None, _) => true,
+        };
+
+        let mut sprite_transform = *transform;
+        sprite_transform.translation.z = 0.35;
+
+        let sprite = SpriteBundle {
+            sprite: Sprite {
+                image: gate_texture.0.clone(),
+                color: Color::WHITE,
+                custom_size: Some(STAR_GATE_SIZE),
+                ..default()
+            },
+            transform: sprite_transform,
+            visibility: if visible {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
+            ..default()
+        };
+
+        commands.spawn((JumpGateVisual { target: entity }, sprite));
+    }
+}
+
+#[allow(clippy::type_complexity)]
+pub fn sync_jump_gate_visuals(
+    mut commands: Commands,
+    mut params: ParamSet<(
+        Query<(Entity, &JumpGateVisual, &mut Transform)>,
+        Query<(Entity, &Transform), With<JumpGate>>,
+    )>,
+) {
+    let gate_transforms = {
+        let gates = params.p1();
+        let mut map = std::collections::HashMap::new();
+        for (entity, transform) in gates.iter() {
+            map.insert(entity, *transform);
+        }
+        map
+    };
+
+    let mut visuals = params.p0();
+    for (visual_entity, visual, mut transform) in visuals.iter_mut() {
+        if let Some(gate_transform) = gate_transforms.get(&visual.target) {
+            let z = transform.translation.z;
+            *transform = *gate_transform;
+            transform.translation.z = z;
         } else {
             commands.entity(visual_entity).despawn();
         }
@@ -579,6 +725,7 @@ pub fn sync_zone_visibility(
     pirate_bases: Query<(Entity, Option<&ZoneId>), With<PirateBase>>,
     pirate_ships: Query<(Entity, Option<&ZoneId>), With<PirateShip>>,
     ships: Query<(Entity, Option<&ZoneId>), With<Ship>>,
+    jump_gates: Query<(Entity, Option<&ZoneId>), With<JumpGate>>,
     // Query visuals to update visibility
     mut station_visuals: Query<(&StationVisual, &mut Visibility)>,
     mut ore_visuals: Query<(&OreVisual, &mut Visibility), Without<StationVisual>>,
@@ -601,6 +748,16 @@ pub fn sync_zone_visibility(
             Without<OreVisual>,
             Without<PirateBaseVisual>,
             Without<PirateShipVisual>,
+        ),
+    >,
+    mut jump_gate_visuals: Query<
+        (&JumpGateVisual, &mut Visibility),
+        (
+            Without<StationVisual>,
+            Without<OreVisual>,
+            Without<PirateBaseVisual>,
+            Without<PirateShipVisual>,
+            Without<ShipVisual>,
         ),
     >,
 ) {
@@ -629,6 +786,11 @@ pub fn sync_zone_visibility(
 
     let ship_zones: std::collections::HashMap<Entity, Option<u32>> =
         ships.iter().map(|(e, z)| (e, z.map(|z| z.0))).collect();
+
+    let jump_gate_zones: std::collections::HashMap<Entity, Option<u32>> = jump_gates
+        .iter()
+        .map(|(e, z)| (e, z.map(|z| z.0)))
+        .collect();
 
     // Update station visuals
     for (visual, mut visibility) in station_visuals.iter_mut() {
@@ -689,6 +851,20 @@ pub fn sync_zone_visibility(
     // Update ship visuals (non-player ships)
     for (visual, mut visibility) in ship_visuals.iter_mut() {
         let visible = match ship_zones.get(&visual.target) {
+            Some(&Some(zone)) => zone == player_zone,
+            Some(&None) => true,
+            None => false,
+        };
+        *visibility = if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+
+    // Update jump gate visuals
+    for (visual, mut visibility) in jump_gate_visuals.iter_mut() {
+        let visible = match jump_gate_zones.get(&visual.target) {
             Some(&Some(zone)) => zone == player_zone,
             Some(&None) => true,
             None => false,

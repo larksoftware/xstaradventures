@@ -7,7 +7,7 @@ use crate::pirates::{PirateBase, PirateShip};
 use crate::plugins::core::FogConfig;
 use crate::ships::ShipKind;
 use crate::stations::Station;
-use crate::world::{KnowledgeLayer, Sector, SystemNode, ZoneModifier};
+use crate::world::{JumpGate, KnowledgeLayer, Sector, SystemNode, ZoneModifier};
 
 // Type aliases for complex query filter combinations
 pub type StationSpawnFilter = (With<Station>, Without<StationVisualMarker>);
@@ -19,6 +19,7 @@ pub type ShipSpawnFilter = (
     Without<ShipVisualMarker>,
     Without<Sprite>,
 );
+pub type JumpGateSpawnFilter = (With<JumpGate>, Without<JumpGateVisualMarker>);
 
 /// Check if either Shift key is pressed (for debug key modifiers)
 pub fn shift_pressed(input: &ButtonInput<KeyCode>) -> bool {
@@ -95,6 +96,14 @@ pub struct PirateShipVisual {
 
 #[derive(Component)]
 pub struct PirateShipVisualMarker;
+
+#[derive(Component)]
+pub struct JumpGateVisual {
+    pub target: Entity,
+}
+
+#[derive(Component)]
+pub struct JumpGateVisualMarker;
 
 // =============================================================================
 // Utility Functions

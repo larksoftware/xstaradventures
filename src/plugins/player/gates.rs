@@ -47,13 +47,12 @@ pub fn player_activate_jump_gate(
         return;
     }
 
-    let (player_entity, player_transform, mut ship, player_zone) =
-        match player_query.single_mut() {
-            Ok(value) => value,
-            Err(_) => {
-                return;
-            }
-        };
+    let (player_entity, player_transform, mut ship, player_zone) = match player_query.single_mut() {
+        Ok(value) => value,
+        Err(_) => {
+            return;
+        }
+    };
 
     let player_pos = Vec2::new(
         player_transform.translation.x,

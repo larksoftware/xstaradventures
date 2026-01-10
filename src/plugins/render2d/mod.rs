@@ -16,8 +16,9 @@ use crate::plugins::core::{GameState, ViewMode};
 // Re-export public types
 pub use camera::{MapPanOffset, MapZoomOverride};
 pub use components::{
-    NodeLabel, NodeVisual, NodeVisualMarker, OreVisual, PirateBaseVisual, PirateShipVisual,
-    RouteLabel, ShipLabel, ShipVisual, ShipVisualMarker, StationLabel, StationVisual,
+    JumpGateVisual, NodeLabel, NodeVisual, NodeVisualMarker, OreVisual, PirateBaseVisual,
+    PirateShipVisual, RouteLabel, ShipLabel, ShipVisual, ShipVisualMarker, StationLabel,
+    StationVisual,
 };
 pub use map::{FocusMarker, IntelRefreshCooldown, RenderToggles};
 
@@ -35,7 +36,15 @@ impl Plugin for Render2DPlugin {
             .init_resource::<MapPanOffset>()
             .init_resource::<FocusMarker>()
             .init_resource::<effects::HomeBeaconEnabled>()
-            .add_systems(Startup, entities::load_player_ship_texture)
+            .add_systems(
+                Startup,
+                (
+                    entities::load_player_ship_texture,
+                    entities::load_star_gate_texture,
+                    entities::load_asteroid_texture,
+                    entities::load_fuel_depot_texture,
+                ),
+            )
             .add_systems(Startup, camera::setup_camera)
             .add_systems(
                 OnEnter(GameState::InGame),
@@ -99,25 +108,35 @@ impl Plugin for Render2DPlugin {
             .add_systems(
                 Update,
                 (
-                    entities::spawn_station_visuals,
-                    entities::sync_station_visuals,
-                    entities::update_station_labels,
-                    entities::spawn_ore_visuals,
-                    entities::sync_ore_visuals,
-                    entities::update_ore_visuals,
-                    entities::spawn_pirate_base_visuals,
-                    entities::sync_pirate_base_visuals,
-                    entities::spawn_pirate_ship_visuals,
-                    entities::sync_pirate_ship_visuals,
-                    entities::spawn_ship_visuals,
-                    entities::sync_ship_visuals,
-                    entities::update_ship_visuals,
-                    entities::update_ship_labels,
-                    entities::sync_zone_visibility,
-                    effects::draw_focus_marker,
-                    effects::draw_tactical_navigation,
-                    effects::draw_home_beacon,
-                    sync_view_entities,
+                    (
+                        entities::spawn_station_visuals,
+                        entities::sync_station_visuals,
+                        entities::update_station_labels,
+                        entities::spawn_ore_visuals,
+                        entities::sync_ore_visuals,
+                        entities::update_ore_visuals,
+                    ),
+                    (
+                        entities::spawn_pirate_base_visuals,
+                        entities::sync_pirate_base_visuals,
+                        entities::spawn_pirate_ship_visuals,
+                        entities::sync_pirate_ship_visuals,
+                        entities::spawn_jump_gate_visuals,
+                        entities::sync_jump_gate_visuals,
+                    ),
+                    (
+                        entities::spawn_ship_visuals,
+                        entities::sync_ship_visuals,
+                        entities::update_ship_visuals,
+                        entities::update_ship_labels,
+                        entities::sync_zone_visibility,
+                    ),
+                    (
+                        effects::draw_focus_marker,
+                        effects::draw_tactical_navigation,
+                        effects::draw_home_beacon,
+                        sync_view_entities,
+                    ),
                 )
                     .run_if(in_state(GameState::InGame))
                     .run_if(camera::view_is_world),
@@ -165,6 +184,7 @@ fn sync_view_entities(
     pirate_ship_visuals: Query<Entity, With<PirateShipVisual>>,
     ship_visuals: Query<(Entity, &ShipVisual)>,
     ship_labels: Query<Entity, With<ShipLabel>>,
+    jump_gate_visuals: Query<(Entity, &JumpGateVisual)>,
 ) {
     match *view {
         ViewMode::World => {
@@ -200,6 +220,12 @@ fn sync_view_entities(
                 commands.entity(entity).despawn();
             }
             for entity in ship_labels.iter() {
+                commands.entity(entity).despawn();
+            }
+            for (entity, visual) in jump_gate_visuals.iter() {
+                commands
+                    .entity(visual.target)
+                    .remove::<components::JumpGateVisualMarker>();
                 commands.entity(entity).despawn();
             }
         }
