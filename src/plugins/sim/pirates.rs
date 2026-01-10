@@ -6,6 +6,7 @@ use crate::compat::SpatialBundle;
 use crate::factions::Faction;
 use crate::pirates::{schedule_next_launch, PirateBase, PirateShip, PirateShipBehavior};
 use crate::stations::{CrisisStage, CrisisType, Station, StationCrisis, StationKind};
+use crate::world::ZoneId;
 
 use super::SimTickCount;
 
@@ -19,9 +20,9 @@ const PIRATE_DOCK_DURATION_TICKS: u64 = 300;
 pub fn pirate_launches(
     ticks: Res<SimTickCount>,
     mut commands: Commands,
-    mut bases: Query<(&Transform, &mut PirateBase)>,
+    mut bases: Query<(&Transform, &mut PirateBase, &ZoneId)>,
 ) {
-    for (transform, mut base) in bases.iter_mut() {
+    for (transform, mut base, zone_id) in bases.iter_mut() {
         if ticks.tick < base.next_launch_tick {
             continue;
         }
@@ -33,6 +34,7 @@ pub fn pirate_launches(
                 behavior: PirateShipBehavior::default(),
             },
             Faction::Pirate,
+            ZoneId(zone_id.0),
             Name::new("Pirate-Ship"),
             SpatialBundle::from_transform(*transform),
         ));
