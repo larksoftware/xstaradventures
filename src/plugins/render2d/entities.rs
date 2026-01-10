@@ -25,7 +25,7 @@ use super::components::{
 // =============================================================================
 
 const PLAYER_SHIP_ASPECT: f32 = 860.0 / 1065.0;
-const PLAYER_SHIP_WIDTH: f32 = 60.0;
+const PLAYER_SHIP_WIDTH: f32 = 120.0;
 const PLAYER_SHIP_SIZE: Vec2 = Vec2::new(PLAYER_SHIP_WIDTH, PLAYER_SHIP_WIDTH * PLAYER_SHIP_ASPECT);
 
 // =============================================================================
